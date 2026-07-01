@@ -48,6 +48,40 @@
             .replace(/'/g, "&#039;");
     }
 
+    function formatBeijingTime(isoString) {
+        if (!isoString) return "";
+        try {
+            const match = isoString.match(
+                /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/
+            );
+            if (!match) return isoString;
+            const utc = new Date(Date.UTC(
+                +match[1], +match[2] - 1, +match[3],
+                +match[4], +match[5], +match[6]
+            ));
+            return utc.toLocaleString("zh-CN", {
+                timeZone: "Asia/Shanghai",
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+            });
+        } catch {
+            return isoString;
+        }
+    }
+
+    function getAnnotationDomPosition(annotation) {
+        const el = document.querySelector(
+            `.annotation-highlight[data-annotation-id="${annotation.id}"]`
+        );
+        if (!el) return Infinity;
+        const range = document.createRange();
+        range.setStartBefore(document.body);
+        range.setEndBefore(el);
+        return range.toString().length + range.commonAncestorContainer.textContent.indexOf(el.textContent || "");
+    }
+
     async function requestJson(url, options) {
         const response = await fetch(url, {
             credentials: "same-origin",
@@ -105,9 +139,13 @@
             return;
         }
 
+        const sorted = [...state.annotations].sort((a, b) => {
+            return getAnnotationDomPosition(a) - getAnnotationDomPosition(b);
+        });
+
         panelBody.innerHTML = `
             <div class="annotation-list">
-                ${state.annotations.map(renderAnnotationCard).join("")}
+                ${sorted.map(renderAnnotationCard).join("")}
             </div>
         `;
 
@@ -253,7 +291,7 @@
                     <div class="annotation-formula-hint" data-annotation-hint="${annotation.id}">
                         公式示例：$E=mc^2$  $\sum_{i=1}^n x_i$
                     </div>
-                    <div class="annotation-updated">${escapeHtml(annotation.updated_at || "")}</div>
+                    <div class="annotation-updated">${formatBeijingTime(annotation.updated_at)}</div>
                 </div>
                 <div class="annotation-note-preview" data-annotation-preview="${annotation.id}"></div>
             </article>
@@ -576,6 +614,17 @@
                 method: "PUT",
                 body: JSON.stringify(patch),
             });
+            // update local updated_at to Beijing time
+            const annotation = state.annotations.find((item) => item.id === id);
+            if (annotation) {
+                annotation.updated_at = new Date().toISOString();
+            }
+            // refresh time display in card without full re-render
+            const card = panelBody.querySelector(`[data-annotation-card="${id}"]`);
+            if (card) {
+                const timeEl = card.querySelector(".annotation-updated");
+                if (timeEl) timeEl.textContent = formatBeijingTime(annotation.updated_at);
+            }
         } catch (error) {
             panelBody.insertAdjacentHTML(
                 "afterbegin",

@@ -212,6 +212,7 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — 无人机 AI 算法知识库</title>
+<link rel="icon" type="image/svg+xml" href="{url_prefix}assets/favicon.svg">
 <link rel="stylesheet" href="{url_prefix}assets/annotations.css">
 <style>
 :root {{
