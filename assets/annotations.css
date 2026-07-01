@@ -1,0 +1,519 @@
+:root {
+    --annotation-panel-bg: var(--sidebar-bg, #f6f8fa);
+    --annotation-panel-width: 360px;
+    --annotation-card-bg: var(--bg, #ffffff);
+    --annotation-shadow: rgba(31, 35, 40, 0.12);
+    --annotation-yellow: #fff3a3;
+    --annotation-green: #c9f7d4;
+    --annotation-blue: #cfe8ff;
+    --annotation-pink: #ffd6e7;
+    --annotation-purple: #e5d4ff;
+    --annotation-orange: #ffe2c2;
+    --annotation-cyan: #c8f5ff;
+    --annotation-gray: #e2e6ec;
+}
+
+body.annotation-panel-collapsed .annotation-panel {
+    width: 0;
+    min-width: 0;
+    border-left: 0;
+}
+
+body.annotation-panel-collapsed .annotation-panel-body,
+body.annotation-panel-collapsed .annotation-panel-title {
+    display: none;
+}
+
+body.annotation-panel-collapsed .annotation-panel-header {
+    padding: 0;
+    border-bottom: 0;
+}
+
+.annotation-panel {
+    width: var(--annotation-panel-width);
+    min-width: var(--annotation-panel-width);
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    border-left: 1px solid var(--border, #d0d7de);
+    background: var(--annotation-panel-bg);
+    display: flex;
+    flex-direction: column;
+    transition: width 0.18s ease, min-width 0.18s ease;
+    z-index: 20;
+}
+
+.annotation-panel-header {
+    min-height: 54px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border, #d0d7de);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.annotation-panel-title {
+    font-weight: 700;
+    color: var(--text, #24292f);
+    white-space: nowrap;
+}
+
+.annotation-toggle,
+.annotation-button,
+.annotation-icon-button {
+    border: 1px solid var(--border, #d0d7de);
+    background: var(--bg, #ffffff);
+    color: var(--text, #24292f);
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.annotation-toggle,
+.annotation-icon-button {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.annotation-button {
+    padding: 6px 10px;
+    font-size: 13px;
+}
+
+body.annotation-panel-collapsed .annotation-toggle {
+    position: fixed;
+    right: 12px;
+    top: 12px;
+    z-index: 40;
+    box-shadow: 0 4px 14px var(--annotation-shadow);
+}
+
+.annotation-toggle:hover,
+.annotation-button:hover,
+.annotation-icon-button:hover {
+    border-color: var(--accent, #0969da);
+    color: var(--accent, #0969da);
+}
+
+.annotation-panel-body {
+    padding: 14px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.annotation-login {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.annotation-login input,
+.annotation-card textarea {
+    width: 100%;
+    border: 1px solid var(--border, #d0d7de);
+    background: var(--bg, #ffffff);
+    color: var(--text, #24292f);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 13px;
+}
+
+.annotation-login input:focus,
+.annotation-card textarea:focus {
+    outline: 2px solid var(--accent-light, #ddf4ff);
+    border-color: var(--accent, #0969da);
+}
+
+.annotation-muted {
+    color: var(--text-secondary, #57606a);
+    font-size: 13px;
+}
+
+.annotation-error {
+    color: #cf222e;
+    font-size: 13px;
+}
+
+.annotation-empty {
+    border: 1px dashed var(--border, #d0d7de);
+    border-radius: 0;
+    padding: 14px;
+    color: var(--text-secondary, #57606a);
+    font-size: 13px;
+    line-height: 1.6;
+    background: var(--bg, #ffffff);
+}
+
+.annotation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.annotation-card {
+    border: 1px solid var(--border, #d0d7de);
+    border-left: 3px solid var(--annotation-yellow);
+    border-radius: 0;
+    background: var(--annotation-card-bg);
+    padding: 8px 10px;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.06), 4px 4px 10px rgba(0,0,0,0.08);
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: box-shadow 0.2s, border-left-color 0.2s;
+}
+
+.annotation-card:hover {
+    box-shadow: 2px 4px 0 rgba(0,0,0,0.08), 6px 6px 16px rgba(0,0,0,0.1);
+}
+
+.annotation-card.is-expanded {
+    padding: 10px;
+    cursor: default;
+    box-shadow: 2px 4px 0 rgba(0,0,0,0.08), 6px 6px 16px rgba(0,0,0,0.1);
+}
+
+.annotation-card[data-color="green"] { border-left-color: var(--annotation-green); }
+.annotation-card[data-color="blue"]  { border-left-color: var(--annotation-blue);  }
+.annotation-card[data-color="pink"]  { border-left-color: var(--annotation-pink);  }
+.annotation-card[data-color="purple"] { border-left-color: var(--annotation-purple); }
+.annotation-card[data-color="orange"] { border-left-color: var(--annotation-orange); }
+.annotation-card[data-color="cyan"]   { border-left-color: var(--annotation-cyan);   }
+.annotation-card[data-color="gray"]   { border-left-color: var(--annotation-gray);   }
+
+.annotation-card-body {
+    display: none;
+}
+
+.annotation-card.is-expanded .annotation-card-body {
+    display: block;
+}
+
+.annotation-card.is-orphan {
+    border-style: dashed;
+}
+
+.annotation-quote {
+    padding: 5px 8px;
+    color: var(--text-secondary, #57606a);
+    background: #f0f4f8;
+    border-radius: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 56px;
+    overflow: hidden;
+    margin-bottom: 0;
+    transition: max-height 0.2s ease;
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+}
+
+.annotation-card.is-expanded .annotation-quote {
+    max-height: 90px;
+    margin-bottom: 6px;
+}
+
+.annotation-card .annotation-color-indicator { background: var(--annotation-yellow); }
+.annotation-card[data-color="green"] .annotation-color-indicator { background: var(--annotation-green); }
+.annotation-card[data-color="blue"]  .annotation-color-indicator { background: var(--annotation-blue);  }
+.annotation-card[data-color="pink"]  .annotation-color-indicator { background: var(--annotation-pink);  }
+.annotation-card[data-color="purple"] .annotation-color-indicator { background: var(--annotation-purple); }
+.annotation-card[data-color="orange"] .annotation-color-indicator { background: var(--annotation-orange); }
+.annotation-card[data-color="cyan"]   .annotation-color-indicator { background: var(--annotation-cyan);   }
+.annotation-card[data-color="gray"]   .annotation-color-indicator { background: var(--annotation-gray);   }
+
+.annotation-card textarea {
+    min-height: 72px;
+    resize: vertical;
+    border-radius: 0;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    font-size: 12px;
+}
+
+/* ── 笔记渲染预览（公式 + 图片，折叠态 body 外可见） ── */
+.annotation-note-preview {
+    display: none;
+    margin: 0 10px 8px;
+    padding: 6px 8px;
+    background: #ffffff;
+    border-left: 3px solid var(--accent, #0969da);
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text, #24292f);
+    word-break: break-word;
+    max-height: 260px;
+    overflow-y: auto;
+    cursor: pointer;
+}
+
+.annotation-note-preview.has-content {
+    display: block;
+}
+
+.annotation-card:not(.is-expanded) .annotation-note-preview.has-content:hover {
+    box-shadow: inset 0 0 0 1px var(--accent, #0969da);
+}
+
+.annotation-note-preview img {
+    max-width: 100%;
+    border-radius: 2px;
+    margin: 4px 0;
+}
+
+/* 块级公式居中 */
+.annotation-note-preview .katex-block {
+    display: block;
+    text-align: center;
+    margin: 3px 0;
+    overflow-x: auto;
+}
+
+/* 行内公式稍微放大 */
+.annotation-note-preview .katex {
+    font-size: 1.05em;
+}
+
+/* ── 公式语法提示（textarea 聚焦时显示） ── */
+.annotation-formula-hint {
+    display: none;
+    font-size: 11px;
+    color: var(--text-secondary, #57606a);
+    background: var(--code-bg, #f6f8fa);
+    border: 1px dashed var(--border, #d0d7de);
+    border-radius: 0;
+    padding: 5px 8px;
+    margin-top: 4px;
+    line-height: 1.6;
+    font-family: "SF Mono", "Fira Code", "Consolas", monospace;
+    overflow-x: auto;
+    white-space: nowrap;
+}
+
+.annotation-formula-hint.is-visible {
+    display: block;
+}
+
+/* ── 悬浮操作按钮（右上角，hover 才显示） ── */
+.annotation-card-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.annotation-card:hover .annotation-card-actions,
+.annotation-card.is-expanded .annotation-card-actions {
+    opacity: 1;
+}
+
+.annotation-action-btn {
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, #57606a);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+
+.annotation-action-btn:hover {
+    background: var(--code-bg, #f6f8fa);
+    color: var(--text, #24292f);
+}
+
+.annotation-action-btn.is-danger:hover {
+    background: #fff0f0;
+    color: #cf222e;
+}
+
+/* ── 紧凑颜色条（卡片顶部） ── */
+.annotation-color-strip {
+    display: flex;
+    gap: 4px;
+    padding: 3px 8px 4px 8px;
+    border-bottom: 1px solid var(--border, #d0d7de);
+    background: var(--code-bg, #f6f8fa);
+    justify-content: flex-start;
+}
+
+.annotation-color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.annotation-color-dot:hover {
+    transform: scale(1.35);
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 30%, transparent);
+}
+
+.annotation-color-dot.is-active {
+    box-shadow: 0 0 0 2px var(--accent, #0969da);
+    border-color: var(--bg, #ffffff);
+}
+
+/* ── 当前颜色小指示点（折叠时用） ── */
+.annotation-color-indicator {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    margin-right: 6px;
+    flex-shrink: 0;
+}
+
+.annotation-color {
+    width: 20px;
+    height: 20px;
+    border: 1px solid rgba(0,0,0,0.08);
+    border-radius: 50%;
+    cursor: pointer;
+    padding: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    flex-shrink: 0;
+    transition: transform 0.12s, box-shadow 0.12s;
+}
+
+.annotation-color:hover {
+    transform: scale(1.2);
+}
+
+.annotation-color.is-active {
+    box-shadow: 0 0 0 2px var(--accent, #0969da);
+}
+
+.annotation-color[data-color="yellow"] { background: var(--annotation-yellow); }
+.annotation-color[data-color="green"] { background: var(--annotation-green); }
+.annotation-color[data-color="blue"] { background: var(--annotation-blue); }
+.annotation-color[data-color="pink"] { background: var(--annotation-pink); }
+.annotation-color[data-color="purple"] { background: var(--annotation-purple); }
+.annotation-color[data-color="orange"] { background: var(--annotation-orange); }
+.annotation-color[data-color="cyan"] { background: var(--annotation-cyan); }
+.annotation-color[data-color="gray"] { background: var(--annotation-gray); }
+
+.annotation-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.annotation-updated {
+    color: var(--text-secondary, #57606a);
+    font-size: 11px;
+    margin-top: 6px;
+}
+
+.annotation-toolbar {
+    position: fixed;
+    display: none;
+    z-index: 1000;
+    background: var(--bg, #ffffff);
+    border: 1px solid var(--border, #d0d7de);
+    box-shadow: 0 8px 24px var(--annotation-shadow);
+    border-radius: 8px;
+    padding: 5px;
+    gap: 5px;
+}
+
+.annotation-toolbar.is-visible {
+    display: flex;
+}
+
+.annotation-highlight {
+    border-radius: 3px;
+    padding: 0 1px;
+    cursor: pointer;
+}
+
+.annotation-highlight[data-color="yellow"] { background: var(--annotation-yellow); }
+.annotation-highlight[data-color="green"] { background: var(--annotation-green); }
+.annotation-highlight[data-color="blue"] { background: var(--annotation-blue); }
+.annotation-highlight[data-color="pink"] { background: var(--annotation-pink); }
+.annotation-highlight[data-color="purple"] { background: var(--annotation-purple); }
+.annotation-highlight[data-color="orange"] { background: var(--annotation-orange); }
+.annotation-highlight[data-color="cyan"] { background: var(--annotation-cyan); }
+.annotation-highlight[data-color="gray"] { background: var(--annotation-gray); }
+
+/* 行内代码在注释高亮上的底色统一 */
+.annotation-highlight[data-color="yellow"] code { background: var(--annotation-yellow); }
+.annotation-highlight[data-color="green"] code  { background: var(--annotation-green); }
+.annotation-highlight[data-color="blue"] code   { background: var(--annotation-blue); }
+.annotation-highlight[data-color="pink"] code   { background: var(--annotation-pink); }
+.annotation-highlight[data-color="purple"] code { background: var(--annotation-purple); }
+.annotation-highlight[data-color="orange"] code { background: var(--annotation-orange); }
+.annotation-highlight[data-color="cyan"] code   { background: var(--annotation-cyan); }
+.annotation-highlight[data-color="gray"] code   { background: var(--annotation-gray); }
+.annotation-highlight[data-color="purple"] { background: var(--annotation-purple); }
+.annotation-highlight[data-color="orange"] { background: var(--annotation-orange); }
+.annotation-highlight[data-color="cyan"] { background: var(--annotation-cyan); }
+.annotation-highlight[data-color="gray"] { background: var(--annotation-gray); }
+
+.annotation-highlight.is-active {
+    box-shadow: 0 0 0 2px var(--accent, #0969da);
+}
+
+.annotation-toolbar-colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-right: 8px;
+    border-right: 1px solid var(--border, #d0d7de);
+    margin-right: 4px;
+    max-width: 110px;
+}
+
+@media (max-width: 1100px) {
+    .annotation-panel {
+        position: fixed;
+        right: 0;
+        top: 0;
+        transform: translateX(0);
+        box-shadow: -8px 0 24px var(--annotation-shadow);
+    }
+
+    body.annotation-panel-collapsed .annotation-panel {
+        transform: translateX(100%);
+        width: var(--annotation-panel-width);
+        min-width: var(--annotation-panel-width);
+    }
+
+    body.annotation-panel-collapsed .annotation-panel-body,
+    body.annotation-panel-collapsed .annotation-panel-title {
+        display: block;
+    }
+
+    body.annotation-panel-collapsed .annotation-panel-header {
+        justify-content: space-between;
+        padding: 12px 14px;
+    }
+}
+
+@media (max-width: 768px) {
+    .annotation-panel {
+        width: min(92vw, var(--annotation-panel-width));
+        min-width: min(92vw, var(--annotation-panel-width));
+    }
+
+    .annotation-toolbar {
+        max-width: calc(100vw - 24px);
+    }
+}
+

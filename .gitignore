@@ -1,0 +1,19 @@
+# 构建产物 — Jenkins 自己跑 build_site.py 生成
+site/
+
+# 笔记数据库 — 每个部署环境独立，不能覆盖
+server/data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# WorkBuddy 本地记忆文件
+.workbuddy/
