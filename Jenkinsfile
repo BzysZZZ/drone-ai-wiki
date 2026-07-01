@@ -11,7 +11,7 @@ pipeline {
         stage('Build Site') {
             steps {
                 sh '''
-                    which python3 || apt install -y python3
+                    pip3 install markdown 2>/dev/null || apt install -y python3-markdown
                     python3 build_site.py
                 '''
             }
