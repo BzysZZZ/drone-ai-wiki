@@ -17,3 +17,6 @@ __pycache__/
 
 # WorkBuddy 本地记忆文件
 .workbuddy/
+
+# Superpowers brainstorming mockups
+.superpowers/

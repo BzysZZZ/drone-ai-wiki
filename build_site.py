@@ -15,6 +15,7 @@ ASSETS_DIR = BASE_DIR / "assets"
 
 # ===== 中文标题映射表 =====
 TITLE_MAP = {
+    "references.md": "参考文献",
     # 概念页
     "concepts/concept-object-detection.md": "目标检测算法",
     "concepts/concept-slam.md": "SLAM 同步定位与建图",
@@ -102,6 +103,8 @@ def get_nav_group(rel: str) -> str:
         return "专题 · 项目"
     elif rel == "index.md":
         return "index"
+    elif rel == "references.md":
+        return "工具 · 私有"
     else:
         return "其他"
 
@@ -180,10 +183,18 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
 
     title = pages[rel_key]["title"]
     group = pages[rel_key]["group"]
-
+    is_references_page = rel_key == "references.md"
+    reference_head_assets = (
+        f'\n<link rel="stylesheet" href="{url_prefix}assets/references.css">'
+        if is_references_page else ""
+    )
+    reference_script = (
+        f'\n<script src="{url_prefix}assets/references.js" defer></script>'
+        if is_references_page else ""
+    )
     # 构建侧边栏
     nav_items = []
-    ordered_groups = ["index", "概念 · 理论", "实体 · 工具", "专题 · 项目", "原始资料", "系统文件"]
+    ordered_groups = ["index", "概念 · 理论", "实体 · 工具", "专题 · 项目", "工具 · 私有", "原始资料", "系统文件"]
     for g in ordered_groups:
         items = [(k, v) for k, v in pages.items() if v["group"] == g and k != "index.md"]
         if items:
@@ -213,7 +224,7 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — 无人机 AI 算法知识库</title>
 <link rel="icon" type="image/svg+xml" href="{url_prefix}assets/favicon.svg">
-<link rel="stylesheet" href="{url_prefix}assets/annotations.css">
+<link rel="stylesheet" href="{url_prefix}assets/annotations.css">{reference_head_assets}
 <style>
 :root {{
     --bg: #ffffff;
@@ -516,6 +527,7 @@ body {{
 </main>
 {annotation_panel_html}
 <script src="{url_prefix}assets/annotations.js" defer></script>
+{reference_script}
 <script>
 // 高亮当前页面
 document.querySelectorAll('.sidebar a').forEach(a => {{

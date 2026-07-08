@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -116,6 +116,71 @@ class AnnotationApiTest(unittest.TestCase):
         )
         self.assertEqual(list_response.get_json()["items"], [])
 
+    def test_references_require_login(self):
+        get_response = self.client.get("/api/references")
+        self.assertEqual(get_response.status_code, 401)
+        self.assertEqual(get_response.get_json()["error"], "authentication_required")
+
+        put_response = self.client.put("/api/references", json={"content": "x"})
+        self.assertEqual(put_response.status_code, 401)
+        self.assertEqual(put_response.get_json()["error"], "authentication_required")
+
+        export_response = self.client.get("/api/references/export.md")
+        self.assertEqual(export_response.status_code, 401)
+        self.assertEqual(export_response.get_json()["error"], "authentication_required")
+
+    def test_authenticated_client_can_read_default_references(self):
+        self.login()
+
+        response = self.client.get("/api/references")
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["content"], "")
+        self.assertIn("updated_at", data)
+
+    def test_authenticated_client_can_save_and_read_references(self):
+        self.login()
+        content = "- [PX4 Docs](https://docs.px4.io/) #px4 #flight-control Official docs"
+
+        save_response = self.client.put("/api/references", json={"content": content})
+        self.assertEqual(save_response.status_code, 200)
+        self.assertEqual(save_response.get_json()["ok"], True)
+        self.assertIn("updated_at", save_response.get_json())
+
+        read_response = self.client.get("/api/references")
+        self.assertEqual(read_response.status_code, 200)
+        self.assertEqual(read_response.get_json()["content"], content)
+
+    def test_authenticated_client_can_export_references_markdown(self):
+        self.login()
+        content = "- [ROS2 Tutorials](https://docs.ros.org/) #ros2 Tutorial index"
+        self.client.put("/api/references", json={"content": content})
+
+        response = self.client.get("/api/references/export.md")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/markdown", response.headers["Content-Type"])
+        self.assertIn("references.md", response.headers["Content-Disposition"])
+        self.assertEqual(response.data.decode("utf-8"), content)
+
+    def test_references_reject_content_over_size_limit(self):
+        self.login()
+        self.app.config["REFERENCE_CONTENT_MAX_BYTES"] = 8
+
+        response = self.client.put("/api/references", json={"content": "123456789"})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "content_too_large")
+    def test_references_reject_missing_content_without_clearing_existing_value(self):
+        self.login()
+        original = "- [PX4 Docs](https://docs.px4.io/) #px4"
+        self.client.put("/api/references", json={"content": original})
+
+        response = self.client.put("/api/references", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "content_required")
+
+        read_response = self.client.get("/api/references")
+        self.assertEqual(read_response.status_code, 200)
+        self.assertEqual(read_response.get_json()["content"], original)
 
 if __name__ == "__main__":
     unittest.main()

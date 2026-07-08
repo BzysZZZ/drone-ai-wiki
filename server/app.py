@@ -1,4 +1,4 @@
-﻿import hashlib
+import hashlib
 import os
 import sqlite3
 from contextlib import closing
@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, Response, jsonify, request, send_from_directory, session
 
 
 SERVER_DIR = Path(__file__).parent
@@ -14,6 +14,8 @@ BASE_DIR = SERVER_DIR.parent
 DEFAULT_DB = SERVER_DIR / "data" / "annotations.db"
 DEFAULT_SITE_DIR = BASE_DIR / "site"
 ALLOWED_COLORS = {"yellow", "green", "blue", "pink"}
+REFERENCE_DOCUMENT_ID = 1
+DEFAULT_REFERENCE_CONTENT_MAX_BYTES = 2 * 1024 * 1024
 
 
 def utc_now():
@@ -48,6 +50,16 @@ def init_db(db_path):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_annotations_page_path ON annotations(page_path)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reference_documents (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                content TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
@@ -58,6 +70,7 @@ def create_app(test_config=None):
         ANNOTATION_PASSWORD=os.environ.get("ANNOTATION_PASSWORD", "change-me"),
         ANNOTATION_DB=os.environ.get("ANNOTATION_DB", str(DEFAULT_DB)),
         SITE_DIR=os.environ.get("SITE_DIR", str(DEFAULT_SITE_DIR)),
+        REFERENCE_CONTENT_MAX_BYTES=DEFAULT_REFERENCE_CONTENT_MAX_BYTES,
     )
     if test_config:
         app.config.update(test_config)
@@ -82,6 +95,38 @@ def create_app(test_config=None):
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+    def get_reference_document(conn):
+        row = conn.execute(
+            """
+            SELECT content, created_at, updated_at
+            FROM reference_documents
+            WHERE id = ?
+            """,
+            (REFERENCE_DOCUMENT_ID,),
+        ).fetchone()
+        if row:
+            return {
+                "content": row["content"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+        return {"content": "", "created_at": None, "updated_at": None}
+
+    def save_reference_document(conn, content):
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO reference_documents (id, content, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                updated_at = excluded.updated_at
+            """,
+            (REFERENCE_DOCUMENT_ID, content, now, now),
+        )
+        conn.commit()
+        return now
 
     def require_login(fn):
         @wraps(fn)
@@ -124,6 +169,45 @@ def create_app(test_config=None):
     def logout():
         session.clear()
         return jsonify({"ok": True})
+
+    @app.get("/api/references")
+    @require_login
+    def get_references():
+        with closing(get_db()) as conn:
+            document = get_reference_document(conn)
+        return jsonify(
+            {
+                "content": document["content"],
+                "updated_at": document["updated_at"],
+            }
+        )
+
+    @app.put("/api/references")
+    @require_login
+    def save_references():
+        data = json_body()
+        if "content" not in data:
+            return jsonify({"error": "content_required"}), 400
+        content = data.get("content")
+        if not isinstance(content, str):
+            return jsonify({"error": "content_must_be_string"}), 400
+        if len(content.encode("utf-8")) > app.config["REFERENCE_CONTENT_MAX_BYTES"]:
+            return jsonify({"error": "content_too_large"}), 400
+
+        with closing(get_db()) as conn:
+            updated_at = save_reference_document(conn, content)
+        return jsonify({"ok": True, "updated_at": updated_at})
+
+    @app.get("/api/references/export.md")
+    @require_login
+    def export_references():
+        with closing(get_db()) as conn:
+            document = get_reference_document(conn)
+        return Response(
+            document["content"],
+            content_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="references.md"'},
+        )
 
     @app.get("/api/annotations")
     @require_login

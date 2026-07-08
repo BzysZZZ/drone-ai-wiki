@@ -1,0 +1,273 @@
+.references-app {
+    width: 100%;
+}
+
+.references-shell {
+    display: grid;
+    grid-template-columns: minmax(280px, 34%) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+}
+
+.references-editor,
+.references-library,
+.references-login {
+    border: 1px solid var(--border, #d0d7de);
+    background: var(--bg, #ffffff);
+    border-radius: 8px;
+}
+
+.references-editor,
+.references-library {
+    padding: 14px;
+}
+
+.references-editor {
+    position: sticky;
+    top: 16px;
+}
+
+.references-editor-header,
+.references-actions,
+.references-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.references-editor-header h2 {
+    margin: 0;
+    border-bottom: 0;
+    padding-bottom: 0;
+    font-size: 20px;
+}
+
+.references-save-state {
+    color: var(--text-secondary, #57606a);
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.references-save-state.is-dirty {
+    color: #9a6700;
+}
+
+.references-editor textarea {
+    width: 100%;
+    min-height: 520px;
+    margin-top: 12px;
+    padding: 12px;
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    background: var(--code-bg, #f6f8fa);
+    color: var(--text, #24292f);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    resize: vertical;
+}
+
+.references-editor textarea:focus,
+.references-toolbar input:focus,
+.references-login input:focus {
+    outline: 2px solid var(--accent-light, #ddf4ff);
+    border-color: var(--accent, #0969da);
+}
+
+.references-actions {
+    margin-top: 10px;
+}
+
+.references-actions button,
+.references-actions a,
+.references-toolbar button,
+.references-tags button,
+.reference-open,
+.references-login button {
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    background: var(--sidebar-bg, #f6f8fa);
+    color: var(--text, #24292f);
+    padding: 6px 10px;
+    text-decoration: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+
+.references-actions button:disabled {
+    cursor: progress;
+    opacity: 0.7;
+}
+
+.references-actions button:hover,
+.references-actions a:hover,
+.references-toolbar button:hover,
+.references-tags button:hover,
+.reference-open:hover,
+.references-login button:hover {
+    border-color: var(--accent, #0969da);
+    color: var(--accent, #0969da);
+}
+
+.references-toolbar input,
+.references-login input {
+    flex: 1;
+    min-width: 0;
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--bg, #ffffff);
+    color: var(--text, #24292f);
+    font: inherit;
+}
+
+.references-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 12px 0;
+}
+
+.references-tags button.is-active {
+    border-color: var(--accent, #0969da);
+    background: var(--accent-light, #ddf4ff);
+    color: var(--accent, #0969da);
+}
+
+.references-count,
+.references-meta {
+    color: var(--text-secondary, #57606a);
+    font-size: 13px;
+    margin-top: 8px;
+}
+
+.references-error {
+    color: #cf222e;
+    font-size: 13px;
+    min-height: 20px;
+    margin-top: 8px;
+}
+
+.references-warnings {
+    margin: 12px 0;
+    padding: 10px;
+    border: 1px solid var(--warning-border, #d4a72c);
+    border-radius: 6px;
+    background: var(--warning-bg, #fff8c5);
+    font-size: 13px;
+}
+
+.references-warnings summary {
+    cursor: pointer;
+    font-weight: 600;
+}
+
+.references-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.reference-card {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 8px;
+    padding: 12px;
+    background: var(--sidebar-bg, #f6f8fa);
+}
+
+.reference-card-main {
+    min-width: 0;
+}
+
+.reference-card h3 {
+    margin: 0;
+    border-bottom: 0;
+    padding-bottom: 0;
+    font-size: 16px;
+    line-height: 1.4;
+}
+
+.reference-card p {
+    margin: 8px 0 0;
+}
+
+.reference-url {
+    color: var(--text-secondary, #57606a);
+    font-size: 13px;
+    word-break: break-all;
+}
+
+.reference-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.reference-tags span {
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 999px;
+    padding: 2px 7px;
+    color: var(--text-secondary, #57606a);
+    font-size: 12px;
+}
+
+.reference-open {
+    align-self: flex-start;
+    white-space: nowrap;
+}
+
+.references-empty {
+    border: 1px dashed var(--border, #d0d7de);
+    border-radius: 8px;
+    padding: 24px;
+    color: var(--text-secondary, #57606a);
+    text-align: center;
+}
+
+.references-login {
+    max-width: 520px;
+    padding: 18px;
+}
+
+.references-login h2 {
+    margin-top: 0;
+}
+
+.references-login form {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+@media (max-width: 1100px) {
+    .references-shell {
+        grid-template-columns: 1fr;
+    }
+
+    .references-editor {
+        position: static;
+    }
+
+    .references-editor textarea {
+        min-height: 300px;
+    }
+}
+
+@media (max-width: 640px) {
+    .reference-card,
+    .references-toolbar,
+    .references-login form {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .reference-open {
+        align-self: stretch;
+        text-align: center;
+    }
+}
