@@ -20,3 +20,6 @@ __pycache__/
 
 # Superpowers brainstorming mockups
 .superpowers/
+
+# Superpowers isolated implementation worktrees
+.worktrees/
