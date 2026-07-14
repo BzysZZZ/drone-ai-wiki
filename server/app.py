@@ -16,6 +16,8 @@ DEFAULT_SITE_DIR = BASE_DIR / "site"
 ALLOWED_COLORS = {"yellow", "green", "blue", "pink"}
 REFERENCE_DOCUMENT_ID = 1
 DEFAULT_REFERENCE_CONTENT_MAX_BYTES = 2 * 1024 * 1024
+DEFAULT_NOTE_CONTENT_MAX_BYTES = 5 * 1024 * 1024
+DEFAULT_NOTE_TITLE_MAX_CHARS = 160
 
 
 def utc_now():
@@ -60,6 +62,20 @@ def init_db(db_path):
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rich_notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                content_html TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rich_notes_updated_at ON rich_notes(updated_at)"
+        )
         conn.commit()
 
 
@@ -71,6 +87,8 @@ def create_app(test_config=None):
         ANNOTATION_DB=os.environ.get("ANNOTATION_DB", str(DEFAULT_DB)),
         SITE_DIR=os.environ.get("SITE_DIR", str(DEFAULT_SITE_DIR)),
         REFERENCE_CONTENT_MAX_BYTES=DEFAULT_REFERENCE_CONTENT_MAX_BYTES,
+        NOTE_CONTENT_MAX_BYTES=DEFAULT_NOTE_CONTENT_MAX_BYTES,
+        NOTE_TITLE_MAX_CHARS=DEFAULT_NOTE_TITLE_MAX_CHARS,
     )
     if test_config:
         app.config.update(test_config)
@@ -127,6 +145,42 @@ def create_app(test_config=None):
         )
         conn.commit()
         return now
+
+    def note_to_dict(row, include_content=False):
+        note = {
+            "id": row["id"],
+            "title": row["title"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if include_content:
+            note["content_html"] = row["content_html"]
+        return note
+
+    def validate_note_title(value):
+        if not isinstance(value, str) or not value.strip():
+            return None, (jsonify({"error": "title_required"}), 400)
+        return value.strip()[: app.config["NOTE_TITLE_MAX_CHARS"]], None
+
+    def validate_note_content(value):
+        if not isinstance(value, str):
+            return None, (jsonify({"error": "content_must_be_string"}), 400)
+        if len(value.encode("utf-8")) > app.config["NOTE_CONTENT_MAX_BYTES"]:
+            return None, (jsonify({"error": "content_too_large"}), 400)
+        return value, None
+
+    def get_note_or_404(conn, note_id):
+        row = conn.execute(
+            """
+            SELECT id, title, content_html, created_at, updated_at
+            FROM rich_notes
+            WHERE id = ?
+            """,
+            (note_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return row
 
     def require_login(fn):
         @wraps(fn)
@@ -209,6 +263,92 @@ def create_app(test_config=None):
             headers={"Content-Disposition": 'attachment; filename="references.md"'},
         )
 
+    @app.get("/api/notes")
+    @require_login
+    def list_notes():
+        with closing(get_db()) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, title, content_html, created_at, updated_at
+                FROM rich_notes
+                ORDER BY updated_at DESC, id DESC
+                """
+            ).fetchall()
+        return jsonify({"items": [note_to_dict(row) for row in rows]})
+
+    @app.post("/api/notes")
+    @require_login
+    def create_note():
+        data = json_body()
+        title, title_error = validate_note_title(data.get("title"))
+        if title_error:
+            return title_error
+        if "content_html" not in data:
+            return jsonify({"error": "content_required"}), 400
+        content_html, content_error = validate_note_content(data.get("content_html"))
+        if content_error:
+            return content_error
+
+        now = utc_now()
+        with closing(get_db()) as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO rich_notes (title, content_html, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (title, content_html, now, now),
+            )
+            conn.commit()
+            row = get_note_or_404(conn, int(cur.lastrowid))
+        return jsonify(note_to_dict(row, include_content=True)), 201
+
+    @app.get("/api/notes/<int:note_id>")
+    @require_login
+    def get_note(note_id):
+        with closing(get_db()) as conn:
+            row = get_note_or_404(conn, note_id)
+        if not row:
+            return jsonify({"error": "not_found"}), 404
+        return jsonify(note_to_dict(row, include_content=True))
+
+    @app.put("/api/notes/<int:note_id>")
+    @require_login
+    def update_note(note_id):
+        data = json_body()
+        updates = {}
+        if "title" in data:
+            title, title_error = validate_note_title(data.get("title"))
+            if title_error:
+                return title_error
+            updates["title"] = title
+        if "content_html" in data:
+            content_html, content_error = validate_note_content(data.get("content_html"))
+            if content_error:
+                return content_error
+            updates["content_html"] = content_html
+        if not updates:
+            return jsonify({"error": "nothing_to_update"}), 400
+
+        updates["updated_at"] = utc_now()
+        assignments = ", ".join(f"{key} = ?" for key in updates)
+        values = list(updates.values()) + [note_id]
+        with closing(get_db()) as conn:
+            cur = conn.execute(f"UPDATE rich_notes SET {assignments} WHERE id = ?", values)
+            conn.commit()
+            if cur.rowcount == 0:
+                return jsonify({"error": "not_found"}), 404
+            row = get_note_or_404(conn, note_id)
+        return jsonify(note_to_dict(row, include_content=True))
+
+    @app.delete("/api/notes/<int:note_id>")
+    @require_login
+    def delete_note(note_id):
+        with closing(get_db()) as conn:
+            cur = conn.execute("DELETE FROM rich_notes WHERE id = ?", (note_id,))
+            conn.commit()
+            if cur.rowcount == 0:
+                return jsonify({"error": "not_found"}), 404
+        return jsonify({"ok": True})
     @app.get("/api/annotations")
     @require_login
     def list_annotations():

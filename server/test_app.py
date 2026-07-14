@@ -182,6 +182,86 @@ class AnnotationApiTest(unittest.TestCase):
         self.assertEqual(read_response.status_code, 200)
         self.assertEqual(read_response.get_json()["content"], original)
 
+
+    def test_notes_require_login(self):
+        list_response = self.client.get("/api/notes")
+        self.assertEqual(list_response.status_code, 401)
+        self.assertEqual(list_response.get_json()["error"], "authentication_required")
+
+        create_response = self.client.post("/api/notes", json={"title": "x", "content_html": "<p>x</p>"})
+        self.assertEqual(create_response.status_code, 401)
+        self.assertEqual(create_response.get_json()["error"], "authentication_required")
+
+        get_response = self.client.get("/api/notes/1")
+        self.assertEqual(get_response.status_code, 401)
+        self.assertEqual(get_response.get_json()["error"], "authentication_required")
+
+    def test_authenticated_client_can_create_list_get_update_and_delete_note(self):
+        self.login()
+
+        create_response = self.client.post(
+            "/api/notes",
+            json={"title": "Flight plan", "content_html": "<h1>Plan</h1><p>PX4 notes</p>"},
+        )
+        self.assertEqual(create_response.status_code, 201)
+        created = create_response.get_json()
+        note_id = created["id"]
+        self.assertIsInstance(note_id, int)
+        self.assertEqual(created["title"], "Flight plan")
+        self.assertEqual(created["content_html"], "<h1>Plan</h1><p>PX4 notes</p>")
+        self.assertIn("created_at", created)
+        self.assertIn("updated_at", created)
+
+        list_response = self.client.get("/api/notes")
+        self.assertEqual(list_response.status_code, 200)
+        items = list_response.get_json()["items"]
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["id"], note_id)
+        self.assertEqual(items[0]["title"], "Flight plan")
+        self.assertNotIn("content_html", items[0])
+
+        get_response = self.client.get(f"/api/notes/{note_id}")
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_response.get_json()["content_html"], "<h1>Plan</h1><p>PX4 notes</p>")
+
+        update_response = self.client.put(
+            f"/api/notes/{note_id}",
+            json={"title": "Updated plan", "content_html": "<p>Updated</p>"},
+        )
+        self.assertEqual(update_response.status_code, 200)
+        self.assertEqual(update_response.get_json()["title"], "Updated plan")
+        self.assertEqual(update_response.get_json()["content_html"], "<p>Updated</p>")
+
+        get_response = self.client.get(f"/api/notes/{note_id}")
+        self.assertEqual(get_response.get_json()["title"], "Updated plan")
+        self.assertEqual(get_response.get_json()["content_html"], "<p>Updated</p>")
+
+        delete_response = self.client.delete(f"/api/notes/{note_id}")
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.get_json(), {"ok": True})
+
+        missing_response = self.client.get(f"/api/notes/{note_id}")
+        self.assertEqual(missing_response.status_code, 404)
+        self.assertEqual(missing_response.get_json()["error"], "not_found")
+
+    def test_notes_validate_required_fields_and_size_limit(self):
+        self.login()
+        self.app.config["NOTE_CONTENT_MAX_BYTES"] = 16
+
+        missing_response = self.client.post("/api/notes", json={})
+        self.assertEqual(missing_response.status_code, 400)
+        self.assertEqual(missing_response.get_json()["error"], "title_required")
+
+        content_response = self.client.post("/api/notes", json={"title": "x"})
+        self.assertEqual(content_response.status_code, 400)
+        self.assertEqual(content_response.get_json()["error"], "content_required")
+
+        large_response = self.client.post(
+            "/api/notes",
+            json={"title": "x", "content_html": "0123456789abcdefg"},
+        )
+        self.assertEqual(large_response.status_code, 400)
+        self.assertEqual(large_response.get_json()["error"], "content_too_large")
 if __name__ == "__main__":
     unittest.main()
 

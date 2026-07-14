@@ -15,6 +15,7 @@ ASSETS_DIR = BASE_DIR / "assets"
 
 # ===== 中文标题映射表 =====
 TITLE_MAP = {
+    "notes.md": "自定义笔记",
     "references.md": "参考文献",
     # 概念页
     "concepts/concept-object-detection.md": "目标检测算法",
@@ -103,6 +104,8 @@ def get_nav_group(rel: str) -> str:
         return "专题 · 项目"
     elif rel == "index.md":
         return "index"
+    elif rel == "notes.md":
+        return "工具 · 私有"
     elif rel == "references.md":
         return "工具 · 私有"
     else:
@@ -184,6 +187,7 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
     title = pages[rel_key]["title"]
     group = pages[rel_key]["group"]
     is_references_page = rel_key == "references.md"
+    is_notes_page = rel_key == "notes.md"
     reference_head_assets = (
         f'\n<link rel="stylesheet" href="{url_prefix}assets/references.css">'
         if is_references_page else ""
@@ -191,6 +195,14 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
     reference_script = (
         f'\n<script src="{url_prefix}assets/references.js" defer></script>'
         if is_references_page else ""
+    )
+    notes_head_assets = (
+        f'\n<link rel="stylesheet" href="{url_prefix}assets/notes.css">'
+        if is_notes_page else ""
+    )
+    notes_script = (
+        f'\n<script src="{url_prefix}assets/notes.js" defer></script>'
+        if is_notes_page else ""
     )
     # 构建侧边栏
     nav_items = []
@@ -224,7 +236,7 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title} — 无人机 AI 算法知识库</title>
 <link rel="icon" type="image/svg+xml" href="{url_prefix}assets/favicon.svg">
-<link rel="stylesheet" href="{url_prefix}assets/annotations.css">{reference_head_assets}
+<link rel="stylesheet" href="{url_prefix}assets/annotations.css">{reference_head_assets}{notes_head_assets}
 <style>
 :root {{
     --bg: #ffffff;
@@ -528,6 +540,7 @@ body {{
 {annotation_panel_html}
 <script src="{url_prefix}assets/annotations.js" defer></script>
 {reference_script}
+{notes_script}
 <script>
 // 高亮当前页面
 document.querySelectorAll('.sidebar a').forEach(a => {{

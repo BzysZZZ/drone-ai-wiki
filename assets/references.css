@@ -53,6 +53,31 @@
     color: #9a6700;
 }
 
+.references-quick-add {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.references-quick-add input,
+.references-toolbar input,
+.references-login input {
+    min-width: 0;
+    border: 1px solid var(--border, #d0d7de);
+    border-radius: 6px;
+    padding: 8px 10px;
+    background: var(--bg, #ffffff);
+    color: var(--text, #24292f);
+    font: inherit;
+    font-size: 13px;
+}
+
+.references-toolbar input,
+.references-login input {
+    flex: 1;
+}
+
 .references-editor textarea {
     width: 100%;
     min-height: 520px;
@@ -67,10 +92,18 @@
 }
 
 .references-editor textarea:focus,
+.references-quick-add input:focus,
 .references-toolbar input:focus,
 .references-login input:focus {
     outline: 2px solid var(--accent-light, #ddf4ff);
     border-color: var(--accent, #0969da);
+}
+
+.references-format-hint {
+    margin-top: 8px;
+    color: var(--text-secondary, #57606a);
+    font-size: 12px;
+    line-height: 1.5;
 }
 
 .references-actions {
@@ -82,7 +115,8 @@
 .references-toolbar button,
 .references-tags button,
 .reference-open,
-.references-login button {
+.references-login button,
+.references-quick-add button {
     border: 1px solid var(--border, #d0d7de);
     border-radius: 6px;
     background: var(--sidebar-bg, #f6f8fa);
@@ -92,6 +126,11 @@
     cursor: pointer;
     font: inherit;
     font-size: 13px;
+}
+
+.references-quick-add button {
+    grid-column: 1 / -1;
+    padding: 7px 10px;
 }
 
 .references-actions button:disabled {
@@ -104,21 +143,10 @@
 .references-toolbar button:hover,
 .references-tags button:hover,
 .reference-open:hover,
-.references-login button:hover {
+.references-login button:hover,
+.references-quick-add button:hover {
     border-color: var(--accent, #0969da);
     color: var(--accent, #0969da);
-}
-
-.references-toolbar input,
-.references-login input {
-    flex: 1;
-    min-width: 0;
-    border: 1px solid var(--border, #d0d7de);
-    border-radius: 6px;
-    padding: 8px 10px;
-    background: var(--bg, #ffffff);
-    color: var(--text, #24292f);
-    font: inherit;
 }
 
 .references-tags {
@@ -259,6 +287,10 @@
 }
 
 @media (max-width: 640px) {
+    .references-quick-add {
+        grid-template-columns: 1fr;
+    }
+
     .reference-card,
     .references-toolbar,
     .references-login form {
@@ -270,4 +302,49 @@
         align-self: stretch;
         text-align: center;
     }
+}
+/* compact reference cards */
+.references-list {
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.reference-card {
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+}
+
+.reference-card h3 {
+    font-size: 14px;
+    line-height: 1.3;
+}
+
+.reference-url {
+    font-size: 12px;
+}
+
+.reference-card p {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-top: 4px;
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.reference-tags {
+    gap: 4px;
+    margin-top: 5px;
+}
+
+.reference-tags span {
+    padding: 1px 6px;
+    font-size: 11px;
+}
+
+.reference-open {
+    padding: 4px 8px;
+    font-size: 12px;
 }
