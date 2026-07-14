@@ -14,7 +14,9 @@ The target is approximately 800 to 1200 additional teaching-comment lines beyond
 
 ## Annotation Standard
 
-Every non-trivial function will explain:
+Every function, including constructors, one-line wrappers, getters, setters, callbacks, and private helpers, must have a Chinese teaching comment inside the function body. A class-level chapter, method index, or comment before the function signature does not count as function coverage.
+
+The comment must appear after the complete function signature and before the first executable statement. Simple functions require at least a concise explanation of purpose, parameters/return value, or side effects. Non-trivial functions will explain:
 
 - Its responsibility in the end-to-end landing pipeline.
 - Who calls it and what it calls next.
@@ -24,6 +26,15 @@ Every non-trivial function will explain:
 - Assumptions, failure modes, and safety limitations.
 
 Obvious Python syntax and direct assignments will not receive repetitive narration.
+
+The coverage rule is intentionally mechanical so it can be audited. Parse the file with Python `ast`, inspect the physical lines between each function signature and its first executable statement, and require a comment or docstring for all functions. The final report must be:
+
+```text
+FUNCTIONS=125
+MISSING=0
+```
+
+Examples such as `_apply_joystick_xy_min_effective` and `_apply_joystick_z_min_effective` must document that they copy the payload, apply the shared per-axis dead-zone helper, describe configuration fallback order, and return a transformed payload without mutating the caller's dictionary.
 
 ## Mathematical Explanations
 
@@ -98,6 +109,6 @@ Comments will identify, without fixing:
 3. Run `git diff --check` on the annotated file.
 4. Confirm the original `.txt` file has no diff.
 5. Run the repository unit tests.
-6. Audit every class and non-trivial function for nearby teaching documentation.
-7. Audit each required formula, numerical example, state, parameter group, and known limitation against this design.
-
+6. Audit every class and function for in-body teaching documentation.
+7. Run the AST/physical-line function coverage audit and require `FUNCTIONS=125`, `MISSING=0`.
+8. Audit each required formula, numerical example, state, parameter group, and known limitation against this design.
