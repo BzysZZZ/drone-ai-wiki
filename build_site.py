@@ -12,11 +12,16 @@ SITE_DIR = BASE_DIR / "site"
 WIKI_DIR = BASE_DIR / "wiki"
 RAW_DIR = BASE_DIR / "raw"
 ASSETS_DIR = BASE_DIR / "assets"
+EXPERIMENTS_DIR = BASE_DIR / "experiments" / "yolo_classics"
+CODE_INCLUDE_RE = re.compile(r"<!--\s*include-code:\s*([^>]+?)\s*-->")
 
 # ===== 中文标题映射表 =====
 TITLE_MAP = {
     "notes.md": "自定义笔记",
     "references.md": "参考文献",
+    "experiments/index.md": "实验复现目录",
+    "experiments/experiment-yolov3-reproduction.md": "YOLOv3 完整复现",
+    "experiments/experiment-yolov4-reproduction.md": "YOLOv4 完整复现",
     # 概念页
     "concepts/concept-object-detection.md": "目标检测算法",
     "concepts/concept-slam.md": "SLAM 同步定位与建图",
@@ -102,6 +107,8 @@ def get_nav_group(rel: str) -> str:
         return "实体 · 工具"
     elif rel.startswith("topics/"):
         return "专题 · 项目"
+    elif rel.startswith("experiments/"):
+        return "实验 · 复现"
     elif rel == "index.md":
         return "index"
     elif rel == "notes.md":
@@ -167,10 +174,36 @@ def convert_wiki_links(text: str, pages: dict, url_prefix: str = "") -> str:
     return re.sub(r'\[\[([^\]]+)\]\]', replace_link, text)
 
 
+def expand_code_includes(raw: str, base_dir: Path = BASE_DIR) -> str:
+    """把实验源码包含标记替换为 Python 代码块，并阻止目录穿越。"""
+    allowed_root = (base_dir / "experiments" / "yolo_classics").resolve()
+
+    def replace_include(match: re.Match) -> str:
+        relative = Path(match.group(1).strip())
+        if relative.is_absolute():
+            raise ValueError(f"非法代码包含路径: {relative}")
+
+        source = (base_dir / relative).resolve()
+        try:
+            source.relative_to(allowed_root)
+        except ValueError as exc:
+            raise ValueError(f"非法代码包含路径: {relative}") from exc
+
+        if not source.is_file():
+            raise FileNotFoundError(f"代码包含文件不存在: {relative}")
+
+        code = source.read_text(encoding="utf-8").rstrip("\n")
+        return f"```python\n{code}\n```"
+
+    return CODE_INCLUDE_RE.sub(replace_include, raw)
+
+
 def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
     """将单个 Markdown 文件转换为完整 HTML"""
     with open(md_path, "r", encoding="utf-8") as f:
         raw = f.read()
+
+    raw = expand_code_includes(raw)
 
     # 计算相对路径前缀（修复子目录页面的侧边栏及正文链接）
     page_url = pages[rel_key]["url"]
@@ -206,7 +239,7 @@ def build_page(md_path: Path, rel_key: str, pages: dict) -> str:
     )
     # 构建侧边栏
     nav_items = []
-    ordered_groups = ["index", "概念 · 理论", "实体 · 工具", "专题 · 项目", "工具 · 私有", "原始资料", "系统文件"]
+    ordered_groups = ["index", "概念 · 理论", "实体 · 工具", "专题 · 项目", "实验 · 复现", "工具 · 私有", "原始资料", "系统文件"]
     for g in ordered_groups:
         items = [(k, v) for k, v in pages.items() if v["group"] == g and k != "index.md"]
         if items:

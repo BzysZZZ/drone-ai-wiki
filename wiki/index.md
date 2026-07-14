@@ -9,6 +9,7 @@
 - 🗺️ 学习路线图 → [[topics/roadmap-drone-ai-engineer]]
 - 📚 AI基本功路线 → [[topics/topic-ai-fundamentals-roadmap]]
 - 📖 基本功书单 → [[topics/topic-foundational-reading-list]]
+- 🧪 网络复现实验 → [[experiments/index]]
 - 🔌 MQTT 工程教程 → [[concepts/concept-mqtt-engineering]]
 - 🤖 ROS2 工程教程 → [[entities/product-ros2]]
 - 📖 Wiki 规则 → [[../SCHEMA.md]]
