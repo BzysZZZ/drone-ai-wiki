@@ -150,3 +150,56 @@ Check every class, non-trivial function, formula, numerical example, state, MQTT
 
 Report original lines, final annotated lines, Chinese teaching-comment lines, documented functions, and remaining undocumented functions. The target is 800 to 1200 additional teaching-comment lines with no unexplained non-trivial functions.
 
+### Task 7: Enforce In-Body Comments For Every Function
+
+**Files:**
+- Modify: `raw/precision-landing-mqtt-code-annotated.py`
+- Verify unchanged: `raw/precision-landing-mqtt-code.txt`
+
+- [ ] **Step 1: Run the mechanical function-coverage audit**
+
+Parse the annotated file with Python `ast`. For every `FunctionDef` and `AsyncFunctionDef`, inspect the physical lines after the complete signature and before the first executable statement. A function passes only when that region contains a `#` comment or the function starts with a docstring.
+
+Baseline expected from the reviewed file:
+
+```text
+FUNCTIONS=125
+MISSING=54
+```
+
+- [ ] **Step 2: Document all missing data-model and MQTT methods**
+
+Add in-body Chinese comments to the 29 missing methods from `ControlCommand.__init__` through `MqttAdapter._apply_joystick_z_min_effective`. Simple getters and setters must state their return value or protocol side effect. Wrappers must explain delegation and whether they mutate their input.
+
+For `_apply_joystick_xy_min_effective` and `_apply_joystick_z_min_effective`, explicitly document payload copying, per-axis delegation, configuration fallback order, disabled-compensation behavior, and non-mutation of the caller's dictionary.
+
+- [ ] **Step 3: Verify the MQTT batch**
+
+Run `py_compile`, AST equality, whitespace checks, and the coverage audit. Expected: AST equality remains true and the missing count decreases by exactly the number of newly documented functions.
+
+- [ ] **Step 4: Document all missing controller methods**
+
+Add in-body Chinese comments to the 20 missing `ArucoLandingController` methods, including constructors, height-source getters, stage selectors, command selectors, reset helpers, simple wrappers, state-name helpers, and final-land predicates. Each comment must identify units, return semantics, state reset, or transition role as applicable.
+
+- [ ] **Step 5: Verify the controller batch**
+
+Run `py_compile`, AST equality, whitespace checks, and the coverage audit. Expected: no controller method remains in the missing list.
+
+- [ ] **Step 6: Document all missing video-source methods**
+
+Add in-body Chinese comments to the five missing `OpenCVVideoSource` and `TailH264Source` methods. Explain resource initialization, release behavior, stderr draining, exact-byte reads, and the meaning of constructor state.
+
+- [ ] **Step 7: Enforce zero missing functions**
+
+Run the coverage audit and require exactly:
+
+```text
+FUNCTIONS=125
+MISSING=0
+```
+
+Any missing function blocks completion, even if it is a one-line getter, setter, wrapper, constructor, or callback.
+
+- [ ] **Step 8: Run final regression verification**
+
+Compile the annotated file, require `AST_EQUIVALENT=True`, run `git diff --check`, confirm the original `.txt` has no diff, and run `python -m unittest server.test_app` with a writable temporary directory.
