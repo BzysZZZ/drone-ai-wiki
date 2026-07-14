@@ -79,6 +79,7 @@ class ControlCommand(object):
     # 控制器内部统一使用速度命令，不关心底层使用哪一种飞控协议。
     # vx/vy 是水平速度（m/s）；vz 正值上升、负值下降；yaw_rate 是偏航角速度。
     def __init__(self, vx=0.0, vy=0.0, vz=0.0, yaw_rate=0.0):
+        # 创建一条统一速度命令，并把输入归一化为 float；该对象本身不发送飞控消息。
         self.vx = float(vx)
         self.vy = float(vy)
         self.vz = float(vz)
@@ -88,6 +89,7 @@ class ControlCommand(object):
 class DetectionResult(object):
     # 单帧检测结果：是否发现目标、中心位置、像素边长、四角点和全部 ID。
     def __init__(self):
+        # 初始化“未检测到目标”的单帧结果，后续由 detect() 填入中心、角点和 ID。
         self.detected = False
         self.marker_center = None
         self.pixel_width = 0.0
@@ -144,6 +146,7 @@ class MqttAdapter(object):
     # MQTT 适配层负责通信和飞控协议转换。控制器只提交 ControlCommand，
     # 本类再转换成 joystick、velocityCtrl 或 targetCtrl 消息。
     def __init__(self, args):
+        # 保存 MQTT/飞控配置并初始化通信、遥测、回复匹配和杆量补偿状态；尚不连接网络。
         self.enable = bool(args.mqtt_enable)
         self.product_id = args.product_id
         # services 是命令入口；osd 是遥测；services_reply 是执行结果。
@@ -196,6 +199,7 @@ class MqttAdapter(object):
 
     @staticmethod
     def _clamp(v, lo, hi):
+        # 将数值 v 限制在闭区间 [lo, hi]，用于阻止速度、角度或杆量越过配置边界。
         return max(lo, min(hi, float(v)))
 
     def _on_connect(self, client, userdata, flags, rc):
@@ -210,6 +214,7 @@ class MqttAdapter(object):
             print('[MQTT] subscribed reply: {}'.format(self.services_reply_topic))
 
     def _on_disconnect(self, client, userdata, rc):
+        # paho 网络线程在断开时调用；只更新连接标志并记录原因，不在回调中重抢控制权。
         self.connected = False
         print('[MQTT] disconnected rc={}'.format(rc))
 
@@ -267,6 +272,7 @@ class MqttAdapter(object):
             print('[MQTT_REPLY] {}'.format(json.dumps(data, ensure_ascii=False)))
 
     def connect(self):
+        # 连接 broker、启动 paho 网络线程，并最多等待 5 秒确认 on_connect 已成功回调。
         if not self.enable:
             return
         self.client.connect(self._args.mqtt_host, int(self._args.mqtt_port), keepalive=self.keepalive)
@@ -278,6 +284,7 @@ class MqttAdapter(object):
             raise RuntimeError('MQTT 连接失败: {}:{}'.format(self._args.mqtt_host, self._args.mqtt_port))
 
     def close(self):
+        # 尽力停止网络循环并断开 MQTT；该方法不等价于零杆量或飞控控制权释放。
         if self.client is not None:
             try:
                 self.client.loop_stop()
@@ -342,9 +349,11 @@ class MqttAdapter(object):
         return msg, None
 
     def get_last_reply(self, method):
+        # 返回指定 method 最近一次回复，找不到时返回 None；主要用于诊断而非严格事务匹配。
         return self._last_reply_by_method.get(method)
 
     def _reply_ok(self, reply):
+        # 将回复统一解释为成功/失败；None 为失败，result 为 0 或缺省值时视为成功。
         if reply is None:
             return False
         try:
@@ -370,21 +379,25 @@ class MqttAdapter(object):
             self._startup_fly_mode, self._startup_joystick_state, self._startup_pva_state))
 
     def _desired_exit_fly_mode(self, args):
+        # 优先返回启动快照中的飞行模式；快照缺失时回退到中断恢复配置值。
         if self._startup_fly_mode is not None and str(self._startup_fly_mode).strip() != '':
             return self._startup_fly_mode
         return args.interrupt_restore_fly_mode
 
     def _desired_exit_joystick_state(self):
+        # 计算退出后应恢复的虚拟摇杆开关；未知状态保守回退为关闭 0。
         if self._startup_joystick_state in (0, 1):
             return int(self._startup_joystick_state)
         return 0
 
     def _desired_exit_pva_state(self):
+        # 计算退出后应恢复的 PVA 控制器开关；未知状态保守回退为关闭 0。
         if self._startup_pva_state in (0, 1):
             return int(self._startup_pva_state)
         return 0
 
     def uses_joystick_control(self, args=None):
+        # 判断当前配置是否选择 joystick 协议；允许传入临时配置，否则使用构造参数。
         cfg = args if args is not None else self._args
         return str(getattr(cfg, 'control_method', 'joystick')).strip().lower() == 'joystick'
 
@@ -457,6 +470,7 @@ class MqttAdapter(object):
         return bool(mode in ('rtl', 'land', 'takeoff', 'point'))
 
     def maybe_warn_auto_mode_block(self):
+        # 最多每秒打印一次“自主模式阻止摇杆控制”警告，避免控制循环刷满日志。
         now = time.time()
         if now - self._auto_mode_warn_ts < 1.0:
             return
@@ -485,6 +499,7 @@ class MqttAdapter(object):
         return bool(mode_ok and js_ok and pva_ok)
 
     def maybe_warn_not_ready(self):
+        # 最多每秒报告一次模式、摇杆、PVA 和 stateType，帮助定位为何命令被就绪门拦截。
         now = time.time()
         if now - self._ready_warn_ts < 1.0:
             return
@@ -499,6 +514,7 @@ class MqttAdapter(object):
         return self.publish_method('hold', None, wait_reply=wait_reply)
 
     def send_brake(self, wait_reply=False):
+        # 请求刹车：joystick 模式仅发中立杆量，其他协议调用 pvaBrake，避免中途切飞行模式。
         if self.uses_joystick_control():
             # Joystick mode: do NOT switch to hold mid-flight.
             # Only send neutral joystick so the current flight mode stays unchanged.
@@ -506,21 +522,26 @@ class MqttAdapter(object):
         return self.publish_method('pvaBrake', None, wait_reply=wait_reply)
 
     def send_disarm(self, wait_reply=False):
+        # 发布 disarm 服务以停止电机；这是有真实飞行副作用的命令，只应在接地后调用。
         return self.publish_method('disarm', None, wait_reply=wait_reply)
 
     def set_fly_mode(self, fly_mode, wait_reply=True, quiet=False):
+        # 发布 setFlyMode 服务，将目标模式放入 data.flyMode，并可同步等待飞控回复。
         return self.publish_method('setFlyMode', {'flyMode': fly_mode}, wait_reply=wait_reply, quiet=quiet)
 
     def set_joystick_state(self, enable, wait_reply=True, quiet=False):
+        # 开启或关闭虚拟摇杆控制权；布尔输入按协议转换为整数 1/0。
         return self.publish_method('setJoystickState', {'enable': int(enable)}, wait_reply=wait_reply, quiet=quiet)
 
     def joystick_effective_max_value(self, args=None):
+        # 返回请求上限与硬安全上限的较小值，并保证至少为 1，供速度到杆量换算使用。
         cfg = args if args is not None else self._args
         requested = int(max(1, abs(int(getattr(cfg, 'joystick_max_value', 300)))))
         hard_limit = int(max(1, abs(int(getattr(cfg, 'joystick_hard_limit', requested)))))
         return int(min(requested, hard_limit))
 
     def set_joystick_value(self, x, y, z, yaw, wait_reply=False, quiet=False):
+        # 将四轴杆量取整并夹紧到有效上限，再发布 setJoystickValue；输入单位为协议整数。
         maxv = self.joystick_effective_max_value()
         data = {
             'x': int(max(-maxv, min(maxv, int(round(x))))),
@@ -531,6 +552,7 @@ class MqttAdapter(object):
         return self.publish_method('setJoystickValue', data, wait_reply=wait_reply, quiet=quiet)
 
     def set_pva_state(self, enable, wait_reply=True, quiet=False):
+        # 发布 setPvaControllerState，控制 velocity/target 路径依赖的 PVA 控制器开关。
         return self.publish_method('setPvaControllerState', {'enable': int(enable)}, wait_reply=wait_reply, quiet=quiet)
 
     def set_manual_limits(self, args, quiet=False, force=False):
@@ -562,6 +584,7 @@ class MqttAdapter(object):
         return ok_all
 
     def send_zero_velocity(self, args, repeat=1, interval=0.05, quiet=False):
+        # 强制发送一到多次四轴零命令；force=True 会绕过死区 hold/pulse 补偿状态。
         cmd = ControlCommand(0.0, 0.0, 0.0, 0.0)
         sent = False
         for _ in range(max(1, int(repeat))):
@@ -660,6 +683,7 @@ class MqttAdapter(object):
         return False
 
     def ensure_motion_mode_before_velocity(self, args):
+        # 检查当前模式是否能接受运动命令；自主模式拒绝抢权，其他模式可尝试切到配置模式。
         mode = self.normalize_fly_mode(self.fly_mode)
 
         # Avoid stealing control when teammate has already entered autonomous modes.
@@ -676,6 +700,7 @@ class MqttAdapter(object):
         return self.is_motion_mode_ready()
 
     def recover_motion_control(self, args, reason='motion rejected'):
+        # 在冷却时间允许时重新申请模式、摇杆/PVA 和限制；自主模式下立即放弃恢复。
         now = time.time()
         if now - self._last_recover_ts < float(args.recover_cooldown):
             return False
@@ -699,6 +724,7 @@ class MqttAdapter(object):
         return self.is_manual_control_ready()
 
     def has_recent_motion_reject(self, recent_sec):
+        # 判断最近一次飞控拒绝运动命令是否仍在保护窗口内，供发送门控暂时停发。
         return (time.time() - self._recent_motion_reject_ts) <= float(recent_sec)
 
     def _velocity_payload(self, cmd, args):
@@ -740,6 +766,7 @@ class MqttAdapter(object):
         return {'x': int(x), 'y': int(y), 'z': int(z), 'yaw': int(yaw)}
 
     def _clear_axis_effective_state(self, axis_name=None):
+        # 清空某轴或全部轴的最小有效杆量 hold 状态，确保后续零值不会被旧补偿覆盖。
         if axis_name is None:
             for k in self._axis_effective_state:
                 self._axis_effective_state[k]['hold_until'] = 0.0
@@ -823,6 +850,9 @@ class MqttAdapter(object):
         return 0
 
     def _apply_joystick_xy_min_effective(self, payload, now, args):
+        # 对水平 x/y 轴应用共享死区补偿。关闭阈值时原样返回；启用时先复制 payload，
+        # 分别委托单轴 helper，参数优先使用 joystick_xy_*，缺省时回退兼容的 xy_*。
+        # 因为修改的是副本 out，调用者传入的 payload 字典不会被原地改变。
         trigger_value = int(abs(getattr(args, 'joystick_xy_min_effective_value', 0)))
         effective_value = int(abs(getattr(args, 'joystick_xy_force_value', 0)))
         bypass_value = int(abs(getattr(args, 'joystick_xy_bypass_value', 0)))
@@ -843,6 +873,8 @@ class MqttAdapter(object):
         return out
 
     def _apply_joystick_z_min_effective(self, payload, now, args):
+        # 对垂直 z 轴应用共享死区补偿。关闭时原样返回；启用时复制 payload 后仅替换 z。
+        # 周期参数按 z 专用值 -> xy 摇杆值 -> 旧 xy 值回退，不原地修改调用者字典。
         trigger_value = int(abs(getattr(args, 'joystick_z_min_effective_value', 0)))
         effective_value = int(abs(getattr(args, 'joystick_z_force_value', 0)))
         bypass_value = int(abs(getattr(args, 'joystick_z_bypass_value', 0)))
@@ -1065,6 +1097,7 @@ class ArucoLandingController(object):
     LAND = 3
 
     def __init__(self, args, mqtt_adapter):
+        # 保存控制参数和 MQTT 适配器，并初始化 SEARCH 状态、视觉缓存、滤波器与测量-执行状态。
         self.args = args
         self.mqtt = mqtt_adapter
         self.state_machine = self.SEARCH
@@ -1117,6 +1150,7 @@ class ArucoLandingController(object):
         self._descend_target_uav_h = None
 
     def _init_aruco(self):
+        # 按配置创建兼容新旧 OpenCV API 的 ArUco 字典和检测参数；缺少 contrib 模块时终止。
         if aruco is None:
             raise RuntimeError('当前 OpenCV 没有 cv2.aruco 模块，请安装带 contrib 的版本')
         try:
@@ -1149,6 +1183,7 @@ class ArucoLandingController(object):
         return raw + float(self.args.camera_radar_height_offset)
 
     def vision_height(self):
+        # 返回最近一次由 marker 像素边长估出的相机高度（米）；无有效估计或转换失败返回 None。
         if self.last_h_est is None:
             return None
         try:
@@ -1157,9 +1192,11 @@ class ArucoLandingController(object):
             return None
 
     def selected_height_source(self):
+        # 将 height_judge_source 规范为小写字符串，供所有高度选择和阈值函数统一判断。
         return str(self.args.height_judge_source).strip().lower()
 
     def selected_height(self):
+        # 严格按配置返回原始雷达高度或视觉高度，不做临时回退；未知来源返回 None。
         src = self.selected_height_source()
         if src == 'radar':
             return self.raw_radar_height()
@@ -1219,6 +1256,7 @@ class ArucoLandingController(object):
         return 'FINAL_ALIGN'
 
     def get_stage_vel_gain_scale(self, uav_height):
+        # 根据机体离地高度选择高/中/最终阶段的水平速度增益缩放；高度未知时采用中段值。
         if uav_height is None:
             return float(self.args.vel_gain_mid_scale)
         if uav_height > float(self.args.stage_high_alt_height):
@@ -1228,6 +1266,7 @@ class ArucoLandingController(object):
         return float(self.args.vel_gain_final_scale)
 
     def get_stage_error_lpf_alpha(self, uav_height):
+        # 返回当前高度阶段的像素误差低通 alpha；值越大越跟手，值越小越抗检测噪声。
         if uav_height is None:
             return float(self.args.error_lpf_alpha_mid)
         if uav_height > float(self.args.stage_high_alt_height):
@@ -1237,6 +1276,7 @@ class ArucoLandingController(object):
         return float(self.args.error_lpf_alpha_final)
 
     def get_stage_cmd_lpf_alpha(self, uav_height):
+        # 返回当前高度阶段的水平命令低通 alpha，用于在响应速度和机身平滑之间取舍。
         if uav_height is None:
             return float(self.args.xy_cmd_lpf_alpha_mid)
         if uav_height > float(self.args.stage_high_alt_height):
@@ -1301,6 +1341,7 @@ class ArucoLandingController(object):
         return vx_cmd, vy_cmd, raw_axis_speed
 
     def select_xy_command(self, du, dv, uav_height=None):
+        # 按 axis_mode 将像素误差委托给单轴或双轴旧控制路径，返回 vx、vy 和原始轴速度。
         axis_mode = str(getattr(self.args, 'axis_mode', 'single')).strip().lower()
         if axis_mode == 'multi':
             return self.select_multi_axis_command(du, dv, uav_height)
@@ -1359,6 +1400,7 @@ class ArucoLandingController(object):
         self._actuate_cmd = ControlCommand(0.0, 0.0, 0.0, 0.0)
 
     def reset_alignment_cycle(self):
+        # 完整重置一轮 ALIGN：清空测量/动作计划、误差滤波和命令滤波，避免旧阶段状态泄漏。
         self.reset_measure_phase()
         self._last_measure_result = None
         self._last_actuation_plan = None
@@ -1389,6 +1431,7 @@ class ArucoLandingController(object):
         return float(bx), float(by)
 
     def get_timed_stage_name(self, uav_h):
+        # 为定时控制路径返回与通用高度分段完全相同的阶段名；该包装保留独立扩展入口。
         return self.get_stage_name(uav_h)
 
     def get_stage_target_height(self, uav_h):
@@ -1403,6 +1446,7 @@ class ArucoLandingController(object):
         return None
 
     def get_stage_min_joystick(self, stage_name):
+        # 返回指定阶段的最小有效水平杆量；高空、中空和最终阶段使用不同现场标定值。
         if stage_name == 'HIGH_ALIGN':
             return int(self.args.timed_stage_min_joystick_high)
         if stage_name == 'MID_ALIGN':
@@ -1410,6 +1454,7 @@ class ArucoLandingController(object):
         return int(self.args.timed_stage_min_joystick_final)
 
     def get_stage_wind_bias(self, stage_name):
+        # 返回指定阶段附加的无方向风补偿杆量；它增加力度，但并不估计真实风向。
         if stage_name == 'HIGH_ALIGN':
             return int(self.args.timed_wind_bias_joystick_high)
         if stage_name == 'MID_ALIGN':
@@ -1417,6 +1462,7 @@ class ArucoLandingController(object):
         return int(self.args.timed_wind_bias_joystick_final)
 
     def get_stage_max_actuation_time(self, stage_name):
+        # 返回指定阶段单次水平动作的最长持续时间，防止误差或模型异常产生长时间横移。
         if stage_name == 'HIGH_ALIGN':
             return float(self.args.timed_actuation_max_time_high)
         if stage_name == 'MID_ALIGN':
@@ -1576,6 +1622,7 @@ class ArucoLandingController(object):
         self._measure_samples = []
 
     def begin_descend_to_target(self, target_uav_h):
+        # 记录下一阶段的机体目标高度、切换到 DESCEND，并清空 ALIGN 测量阶段状态。
         self._descend_target_uav_h = float(target_uav_h)
         self.state_machine = self.DESCEND
         self.reset_measure_phase()
@@ -1599,6 +1646,7 @@ class ArucoLandingController(object):
         return (self.args.camera_fx * self.args.marker_size) / float(pixel_width)
 
     def get_current_height(self):
+        # 返回供控制几何使用的当前相机高度，并允许 selected_height_for_control 的传感器回退。
         return self.selected_height_for_control()
 
     def startup_guard_ok(self):
@@ -1647,9 +1695,11 @@ class ArucoLandingController(object):
         return result
 
     def clip(self, v, lim):
+        # 将 v 对称限制在 [-lim, lim]，用于旧控制路径限制速度命令绝对值。
         return max(min(float(v), float(lim)), -float(lim))
 
     def state_name(self):
+        # 将整数状态映射为便于日志和预览显示的 SEARCH/ALIGN/DESCEND/LAND 名称。
         return ['SEARCH', 'ALIGN', 'DESCEND', 'LAND'][self.state_machine]
 
     def _handle_vision_loss_transition(self):
@@ -1680,12 +1730,14 @@ class ArucoLandingController(object):
         return False
 
     def low_alt_direct_vertical_active(self, camera_h, raw_radar_h):
+        # 按选定高度源判断是否进入近地纯垂直区；该区域停止水平修正以降低贴地侧翻风险。
         src = self.selected_height_source()
         if src == 'vision':
             return camera_h is not None and camera_h <= float(self.args.direct_vertical_camera_height)
         return raw_radar_h is not None and raw_radar_h <= float(self.args.direct_vertical_radar_height)
 
     def should_force_final_land(self, uav_h):
+        # 当机体高度不高于 final_direct_land_height 时返回 True，允许已对准目标直接进入 LAND。
         return uav_h is not None and uav_h <= float(self.args.final_direct_land_height)
 
     def update(self, frame_bgr):
@@ -2123,6 +2175,7 @@ class OpenCVVideoSource(object):
     # 简单视频源：OpenCV 直接读取摄像头编号、普通视频文件或 RTSP 地址。
     # 每次 read() 同步解码一帧，适合离线视频和常规视频流。
     def __init__(self, args):
+        # 保存输入配置并初始化空的 VideoCapture、来源类型和最近交付帧时间戳。
         self.args = args
         self.cap = None
         self.is_camera = False
@@ -2154,6 +2207,7 @@ class OpenCVVideoSource(object):
         return True, frame, self.last_frame_ts
 
     def release(self):
+        # 若 VideoCapture 已创建则释放摄像头/文件句柄；可在 finally 中重复安全调用。
         if self.cap is not None:
             self.cap.release()
 
@@ -2226,6 +2280,7 @@ class TailH264Source(object):
     # release 设置 stop_event、唤醒等待者、terminate FFmpeg，超时后才 kill。守护线程
     # 随进程退出，但显式收尾能减少管道未关闭、FFmpeg 残留和文件句柄泄漏。
     def __init__(self, args):
+        # 初始化 FFmpeg 进程、三线程同步对象、固定帧字节数、tail 偏移和实时数据标志。
         self.args = args
         self.proc = None
         self.stop_event = threading.Event()
@@ -2285,6 +2340,7 @@ class TailH264Source(object):
         return self
 
     def _stderr_loop(self):
+        # 后台持续排空 FFmpeg stderr 并打印错误；若不消费，管道写满可能反向阻塞解码器。
         try:
             while not self.stop_event.is_set() and self.proc is not None and self.proc.stderr is not None:
                 line = self.proc.stderr.readline()
@@ -2320,6 +2376,7 @@ class TailH264Source(object):
             print('[TAIL_H264] reader error: {}'.format(e))
 
     def _read_exact(self, fd, n):
+        # 从管道循环累积恰好 n 字节；短读时继续等待，进程退出或 stop_event 触发则返回 None。
         buf = bytearray()
         while len(buf) < n and not self.stop_event.is_set():
             chunk = fd.read(n - len(buf))
