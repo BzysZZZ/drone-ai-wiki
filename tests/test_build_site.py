@@ -51,3 +51,27 @@ class ExperimentNavigationTest(unittest.TestCase):
         page = pages["experiments/index.md"]
         self.assertEqual(page["url"], "experiments/index.html")
         self.assertEqual(page["group"], "实验 · 复现")
+
+
+class ExperimentPageBuildTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        build_site.build_site()
+
+    def test_yolov3_page_contains_full_source(self):
+        html = (build_site.SITE_DIR / "experiments" / "experiment-yolov3-reproduction.html").read_text(encoding="utf-8")
+        self.assertIn("class YOLOv3", html)
+        self.assertIn("def compute_yolov3_loss", html)
+        self.assertNotIn("include-code:", html)
+
+    def test_yolov4_page_contains_full_source(self):
+        html = (build_site.SITE_DIR / "experiments" / "experiment-yolov4-reproduction.html").read_text(encoding="utf-8")
+        self.assertIn("class YOLOv4", html)
+        self.assertIn("def compute_yolov4_loss", html)
+        self.assertNotIn("include-code:", html)
+
+    def test_sidebar_contains_experiment_group(self):
+        html = (build_site.SITE_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn("实验 · 复现", html)
+        self.assertIn("YOLOv3 完整复现", html)
+        self.assertIn("YOLOv4 完整复现", html)
