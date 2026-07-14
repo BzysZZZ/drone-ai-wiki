@@ -544,7 +544,7 @@ body {{
     .sidebar {{
         width: 100%; min-width: 100%; height: auto;
         position: relative; border-right: none; border-bottom: 1px solid var(--border);
-        padding: 12px 0;
+        padding: 12px 0; max-height: 38vh; overflow-y: auto;
     }}
     .main {{ padding: 20px 16px 60px; }}
     .main h1 {{ font-size: 24px; }}

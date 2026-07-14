@@ -75,3 +75,4 @@ class ExperimentPageBuildTest(unittest.TestCase):
         self.assertIn("实验 · 复现", html)
         self.assertIn("YOLOv3 完整复现", html)
         self.assertIn("YOLOv4 完整复现", html)
+        self.assertIn("max-height: 38vh", html)
