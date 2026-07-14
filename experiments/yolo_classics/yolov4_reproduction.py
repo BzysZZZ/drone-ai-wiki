@@ -120,6 +120,7 @@ class ConvBNAct(nn.Module):
     """YOLOv4 卷积积木：Conv2d + BatchNorm + Mish。"""
 
     def __init__(self, in_channels: int, out_channels: int, kernel: int, stride: int = 1):
+        """按给定通道、卷积核和步幅创建 Mish 卷积积木。"""
         super().__init__()
         padding = (kernel - 1) // 2
         self.block = nn.Sequential(
@@ -137,6 +138,7 @@ class ResidualBlock(nn.Module):
     """Darknet-53 残差块：先用 1x1 压缩，再用 3x3 恢复通道。"""
 
     def __init__(self, channels: int):
+        """创建输入输出通道相同的两层残差分支。"""
         super().__init__()
         hidden = channels // 2
         self.body = nn.Sequential(
@@ -153,6 +155,7 @@ class CSPStage(nn.Module):
     """CSP 阶段：只让一半通道经过残差堆叠，再与旁路融合。"""
 
     def __init__(self, in_channels: int, out_channels: int, blocks: int):
+        """创建下采样、CSP 双分支、残差堆叠和通道融合。"""
         super().__init__()
         hidden = out_channels // 2
         self.downsample = ConvBNAct(in_channels, out_channels, 3, stride=2)
@@ -174,6 +177,7 @@ class CSPDarknet53(nn.Module):
     """CSPDarknet-53 主干，返回 stride 8、16、32 的三个特征图。"""
 
     def __init__(self, width_mult: float = 1.0, depth_mult: float = 1.0):
+        """按倍率构建 CSPDarknet-53；倍率 1.0 对应完整结构。"""
         super().__init__()
         c = [_channels(v, width_mult) for v in (32, 64, 128, 256, 512, 1024)]
         depths = [max(1, round(v * depth_mult)) for v in (1, 2, 8, 8, 4)]
@@ -198,6 +202,7 @@ class DetectionBlock(nn.Module):
     """PAN 检测块；route 继续参与跨尺度融合，tip 用于预测。"""
 
     def __init__(self, in_channels: int, route_channels: int):
+        """创建 PAN 路径中的特征整合卷积和预测前 tip。"""
         super().__init__()
         self.layers = nn.Sequential(
             ConvBNAct(in_channels, route_channels, 1),
@@ -218,6 +223,7 @@ class SpatialPyramidPooling(nn.Module):
     """并联 5/9/13 最大池化，在不降采样的情况下扩大感受野。"""
 
     def __init__(self):
+        """创建 5、9、13 三个保持空间尺寸的最大池化层。"""
         super().__init__()
         self.pools = nn.ModuleList(nn.MaxPool2d(size, 1, size // 2) for size in (5, 9, 13))
 
@@ -235,6 +241,7 @@ class YOLOv4(nn.Module):
         width_mult: float = 1.0,
         depth_mult: float = 1.0,
     ):
+        """根据类别数和可选验证倍率构建 CSP-SPP-PAN 检测器。"""
         super().__init__()
         if num_classes <= 0:
             raise ValueError("num_classes 必须大于 0")
@@ -497,6 +504,7 @@ class DetectionDataset(Dataset):
     """VOC 与 YOLO 文本数据集共用的图像预处理基类。"""
 
     def __init__(self, image_dir: str | Path, class_names: Sequence[str], image_size: int, augment: bool):
+        """扫描图片目录，并保存类别、输入尺寸和 Mosaic 增强开关。"""
         self.image_dir = Path(image_dir)
         if not self.image_dir.is_dir():
             raise FileNotFoundError(f"图片目录不存在: {self.image_dir}")
@@ -543,6 +551,7 @@ class YoloTextDataset(DetectionDataset):
     """读取每行 ``class cx cy width height`` 的 YOLO 文本标注。"""
 
     def __init__(self, image_dir, label_dir, class_names, image_size=416, augment=False):
+        """创建 YOLO 文本数据集并验证标注目录存在。"""
         super().__init__(image_dir, class_names, image_size, augment)
         self.label_dir = Path(label_dir)
         if not self.label_dir.is_dir():
@@ -574,6 +583,7 @@ class VOCDataset(DetectionDataset):
     """读取 Pascal VOC XML 标注。"""
 
     def __init__(self, image_dir, annotation_dir, class_names, image_size=416, augment=False):
+        """创建 VOC XML 数据集并验证标注目录存在。"""
         super().__init__(image_dir, class_names, image_size, augment)
         self.annotation_dir = Path(annotation_dir)
         if not self.annotation_dir.is_dir():
@@ -753,6 +763,7 @@ def train(args) -> None:
         parameter_group.setdefault("initial_lr", args.learning_rate)
 
     def learning_rate_factor(epoch: int) -> float:
+        """先线性预热，再按余弦曲线衰减学习率。"""
         if epoch < warmup_epochs:
             return (epoch + 1) / warmup_epochs
         progress = (epoch - warmup_epochs) / max(1, args.epochs - warmup_epochs)
