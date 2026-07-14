@@ -20,6 +20,37 @@ from __future__ import print_function
 # 本脚本不是 PID，而是“悬停采样 -> 平均误差 -> 定时打杆 -> 再次测量”控制。
 # 推荐阅读：数据类 -> detect() -> build_timed_actuation_plan() -> update()
 # -> send_velocity() -> run_with_interrupt_cleanup()。
+#
+# =============================================================================
+# 第一章：先建立完整的控制系统地图
+# =============================================================================
+#
+# 1. 本程序不直接控制电机。姿态环、角速度环和电机分配仍由飞控完成。
+# 本程序属于外层引导：观察降落标志，再要求飞控产生水平或垂直速度。
+#
+#   飞控内环：期望速度/杆量 -> 姿态与电机 -> 无人机真实运动
+#   Python外环：相机画面 -> ArUco偏差 -> 速度命令 -> 飞控
+#
+# 2. 外环使用两类反馈。
+# 视觉反馈给出目标中心、像素边长和是否检测成功；OSD 遥测给出高度、
+# 垂直速度、飞行模式以及摇杆/PVA 控制权。反馈过期会使决策落后于飞机。
+#
+# 3. 重要坐标和单位。
+# 图像 u 向右为正、v 向下为正，单位 px；vx/vy 是水平速度，单位 m/s；
+# vz 正值上升、负值下降；yaw_rate 是 degree/s；协议摇杆是无量纲整数。
+#
+# 图像向右不必然等于飞机向右。相机安装、机体系和协议方向可能不同，代码
+# 要经过 swap_xy、invert_x/y、图像 yaw 补偿和摇杆 sign。真机前必须拆桨逐轴
+# 验证方向，否则负反馈会变成正反馈，误差越修越大。
+#
+# 4. 为什么不是逐帧 PID？
+# 虚拟摇杆存在死区，小杆量可能完全不动。代码采用：悬停采样 -> 平均误差
+# -> 计算越过死区的杆量和保持时间 -> 停止 -> 再测量。这是离散的
+# measure-actuate 控制。优点是适应死区，缺点是动作期间不是连续视觉闭环。
+#
+# 5. 安全边界。
+# 学习版的可执行语句与现场版相同。运行会连接默认 broker，并可能发送
+# setFlyMode、setJoystickState、land 和 disarm。离线学习只做阅读、AST 和编译。
 
 import argparse
 import json
@@ -65,6 +96,51 @@ class DetectionResult(object):
 
 
 class MqttAdapter(object):
+    #
+    # -------------------------------------------------------------------------
+    # MQTT 初学者补课
+    # -------------------------------------------------------------------------
+    # MQTT 是发布/订阅协议。本程序向 broker 的 topic 发布 JSON，机载程序订阅后
+    # 解释 method/data。services 是命令，osd 是周期遥测，services_reply 是结果。
+    # publish 成功只说明消息进入网络层，不说明飞机完成动作，重要命令还要看 reply。
+    #
+    # 请求与回复为何需要 tid？网络是异步的，连续发送 A、B 后回复可能稍晚到达。
+    # 每条请求生成唯一 tid，回调存入 _replies_by_tid[tid]；wait_reply 只取自己的
+    # tid，避免把 B 的回复误认为 A。bid 是协议业务标识，不参与这里的等待匹配。
+    #
+    # 线程模型：主线程处理视频和控制；paho loop_start 建立网络线程执行回调；
+    # Condition 保护回复字典，并让主线程睡眠等待。relative_alt、fly_mode 等由
+    # 网络线程写、主线程读，它们不是事务快照，可能出现新高度配旧模式的短暂组合。
+    #
+    # 控制权并不等于“MQTT 已连接”。命令生效还要求飞行模式允许、joystickState
+    # 已开启，非 joystick 协议还要 PVA 开启，并且飞机未进入 RTL/LAND 等自主模式。
+    # initialize_for_run 先释放残留控制权再重新申请；运行中若别的控制源切入自主
+    # 模式，本程序停止运动命令，避免两个控制器争夺飞机。
+    #
+    # capture_startup_state 保存进入前状态。退出顺序是零命令 -> 关闭控制器 ->
+    # 恢复模式。直接断开 MQTT 可能使最后一条非零命令在飞控超时前继续生效。
+    #
+    # 速度到摇杆的换算：
+    #   stick = sign * joystick_max * requested_speed / allowed_speed
+    # 例：max=300，水平上限 2.0 m/s，请求 0.4 m/s，杆量绝对值=300*0.4/2=60。
+    # 若 pitch_sign=-1，最终 x=-60。协议杆量是无量纲整数，不再具有 m/s 单位。
+    #
+    # 现场死区约 150，60 可能完全不动。hold 模式将它抬到 170 并保持最短时间；
+    # pulse 模式使用 duty=abs(raw)/effective。上例 duty=60/170≈0.353；周期 0.4 s
+    # 时开启约 0.141 s，时间平均杆量约为 60。on_min/on_max 防止脉冲过短或过长。
+    # force=True 用于退出零命令，会清空补偿状态，否则“停下”的 0 可能仍被 hold
+    # 替换为 170，形成危险残留运动。
+    #
+    # 控制 method：setJoystickValue 发整数杆量；velocityCtrl 发 m/s；targetCtrl
+    # 还带加速度目标和限制；hold/brake 停止运动；land 交给飞控最终降落；disarm
+    # 停止电机，只能在可靠接地后执行。
+    #
+    # 发送有两层限频：maybe_send_command 管业务频率、帧间隔和变化阈值；
+    # send_velocity 用 command_keepalive 去重相同 payload。相同命令到期仍重发，
+    # 防止飞控因长时间收不到外部命令而退出控制。
+    #
+    # QoS=0 延迟低但可能丢包；QoS=1 至少一次但可能重复。两者都不是安全保证，
+    # 网络中断后的行为必须由飞控 failsafe 兜底。
     # MQTT 适配层负责通信和飞控协议转换。控制器只提交 ControlCommand，
     # 本类再转换成 joystick、velocityCtrl 或 targetCtrl 消息。
     def __init__(self, args):
@@ -856,6 +932,127 @@ class MqttAdapter(object):
 
 
 class ArucoLandingController(object):
+    #
+    # =========================================================================
+    # 第二章：视觉几何和控制数学
+    # =========================================================================
+    #
+    # 一、图像坐标到真实距离
+    #
+    # 相机针孔模型的核心关系是“相似三角形”：
+    #
+    #   像素尺寸 / 焦距像素 = 真实尺寸 / 深度
+    #
+    # 已知 ArUco 真实边长 L、图像平均边长 w、水平焦距 fx，可估算深度：
+    #
+    #   h ≈ fx * L / w
+    #
+    # 默认 fx=550 px、L=0.20 m。若检测边长 w=110 px，则 h≈550*0.2/110=1 m。
+    # 若 w=55 px，则 h≈2 m。目标越远，在图像中越小。
+    #
+    # 目标中心相对期望像素差为 du、dv。小角度且地面水平、相机垂直时：
+    #
+    #   body_x ≈ h * dv / fy
+    #   body_y ≈ h * du / fx
+    #
+    # 例：h=2 m、du=80 px、fx=550 px，则横向距离约 2*80/550=0.291 m。
+    # 相同 80 px 在 h=0.5 m 时只有 0.073 m，所以像素容差不能脱离高度理解。
+    #
+    # 这些不是完整三维位姿。代码没有使用相机畸变参数、solvePnP、标志法向量或
+    # 无人机 roll/pitch。若飞机倾斜，w 变小不一定是高度增加，du/dv 也混入姿态
+    # 投影。精度要求更高时应标定相机、用 PnP 求 6DoF，并把 IMU 姿态纳入变换。
+    #
+    # 二、四套坐标不要混在一起
+    #
+    # 1. 图像坐标：u 向右、v 向下。
+    # 2. 相机几何：光轴指向地面，水平轴由安装方向决定。
+    # 3. 机体坐标：通常前/右/下或前/右/上，需以飞控协议为准。
+    # 4. 摇杆协议：本项目文档规定 x=-1000 表示前进，因此 pitch_sign 默认 -1。
+    #
+    # transform_xy_pair 处理 swap_xy 和 invert；image_yaw_comp_deg 在图像平面旋转
+    # du/dv；_joystick_payload 再应用 pitch/roll/throttle/yaw sign。它们作用层级
+    # 不同，不能靠同时改多个 sign 来“试到能飞”，否则后续很难判断真实坐标关系。
+    #
+    # 推荐标定步骤：拆桨固定机体，在画面中将标志移向右侧，确认 du>0；根据期望
+    # 无人机应怎样移动来追踪标志，逐层检查 body 命令和最终 MQTT 杆量符号。
+    #
+    # 三、高度为什么有三种表达
+    #
+    # raw_radar_height 是传感器到地距离；vision_height 是相机到标志平面的距离；
+    # selected_uav_height 扣除传感器机械安装高度，近似机体最低点/参考点离地高度。
+    # 水平几何需要相机高度，状态分段需要机体高度，二者混用会让 0.7 m 阈值整体
+    # 偏移。camera_radar_height_offset = camera_ground_offset-radar_ground_offset。
+    #
+    # 四、低通滤波
+    #
+    # 一阶低通公式：
+    #
+    #   filtered_t = (1-alpha)*filtered_(t-1) + alpha*measurement_t
+    #
+    # alpha=0.25 时，旧值占 75%，新帧只占 25%，抖动小但响应慢。假设旧 du=100，
+    # 新 du=20，结果为 0.75*100+0.25*20=80，不会一帧跳到 20。
+    # alpha=0.75 时结果为 40，更跟手但更容易把检测噪声变成运动命令。
+    # 代码高空使用较小 alpha 抗远距离角点抖动，低空使用较大 alpha 减少延迟。
+    # error LPF 平滑测量，command LPF 平滑输出；串联会增加总延迟，不能只追求平稳。
+    #
+    # 五、分阶段降落
+    #
+    # HIGH_ALIGN：机体高于 2 m，容差宽，动作时间允许较长。
+    # MID_ALIGN：0.7~2 m，容差和动作时间收紧。
+    # FINAL_ALIGN：不高于 0.7 m，要求最严格，满足后进入 LAND。
+    #
+    # 高空目标小、像素噪声大，过严容差会永远对不准；低空同样像素误差代表更小
+    # 米级距离，但横移风险更高，所以要降低单次动作时间和风补偿。
+    #
+    # 六、测量-执行控制器的完整推导
+    #
+    # measure 阶段悬停 hover_measure_time，至少收集 hover_measure_min_samples 个样本。
+    # summarize_measure 对 du、dv、高度取均值，再换成 body_x/body_y。均值抑制零均值
+    # 噪声，但若风持续推动飞机，均值描述的是一段运动轨迹的平均，不是严格当前值。
+    #
+    # 当前阶段像素容差也换算成米。某轴真正需要修正的距离是：
+    #
+    #   residual = max(0, abs(body_distance) - deadband_scale*tol_m)
+    #
+    # 例：误差 0.291 m、允许 0.08 m，residual=0.211 m。控制器只试图移动到容差
+    # 边缘，不追求数学上的零误差，避免在中心附近来回振荡。
+    #
+    # 杆量计划：
+    #
+    #   joy = stage_min_joy + wind_bias + distance_gain*residual
+    #
+    # 假设 stage_min=165、wind_bias=12、distance_gain=90 joystick/m、residual=0.211，
+    # joy≈165+12+18.99=196。若 maxv=300、manual_hor_spd_max=2 m/s，则理论速度：
+    #
+    #   theoretical_speed = 2 * 196/300 ≈ 1.307 m/s
+    #
+    # 飞机未必达到理论速度，因此乘轴响应系数 response_gain。若 gain=0.9：
+    # effective_speed≈1.176 m/s，理想保持时间：
+    #
+    #   act_time = residual/effective_speed ≈ 0.211/1.176 = 0.179 s
+    #
+    # 最后 clip 到 timed_actuation_min_time 和当前阶段 max_time。这里会被最小 0.18 s
+    # 略微抬高。actuate 阶段在这 0.18 s 内保持同一命令，不逐帧改变。
+    #
+    # 七、单轴与双轴
+    #
+    # single 只选 residual 更大的轴。优点是容易观察响应、不易同时倾斜造成耦合；
+    # 缺点是两个轴串行修正，耗时更长，另一轴可能在等待期间受风漂移。
+    # multi 同时修正 x/y，并用较长轴时间作为共同持续时间，再反算每轴速度，使两个
+    # 轴理论上同时结束。它效率高，但更依赖坐标标定和独立轴响应模型。
+    #
+    # 八、响应系数怎样学习
+    #
+    # 执行前误差 prev，执行后误差 curr。若没有越过中心：actual_move=|prev|-|curr|；
+    # 若符号翻转表示越过中心：actual_move=|prev|+|curr|。然后：
+    #
+    #   ratio = actual_move/predicted_move
+    #   target_gain = old_gain*ratio
+    #   new_gain = (1-alpha)*old_gain + alpha*target_gain
+    #
+    # 实际移动不足时 ratio<1，gain 下降，下一次同样距离会计算更长 act_time；实际
+    # 移动过多则相反。ratio 和 gain 都限幅，防止一次误检把模型改得极端。
+    # 这只是每轴标量自适应，不是 EKF，也不估计风速、速度惯性或轴间耦合。
     # 精准降落的核心控制器。它每收到一帧图像就更新视觉信息和状态机，
     # 输出 ControlCommand，但不直接操作 MQTT。
     #
@@ -1494,6 +1691,83 @@ class ArucoLandingController(object):
     def update(self, frame_bgr):
         # 每帧控制主函数：先更新视觉与高度，再按当前状态生成动作。
         # 返回值只描述意图，真正发送由 maybe_send_command() 统一门控。
+        #
+        # ---------------------------------------------------------------------
+        # 状态机阅读手册
+        # ---------------------------------------------------------------------
+        # 状态机的价值是把“什么时候可以横移、什么时候可以下降、什么时候交给飞控”
+        # 写成离散规则。若只用一条连续公式同时控制 xyz，很难保证低空时不横冲。
+        #
+        # SEARCH
+        #   进入：程序启动，或者 ALIGN 中目标丢失。
+        #   输出：默认 hold/中立摇杆，不主动盘旋寻找。
+        #   退出：startup_guard_ok 且本帧检测到指定 marker，最近检测未超时。
+        #   物理意义：没有可靠目标时不根据旧位置盲飞。
+        #   风险：search_use_hold 的协议语义若与现场固件不同，可能发生模式变化。
+        #
+        # ALIGN.measure
+        #   进入：首次发现目标、一次 actuation 结束，或到达分段下降目标高度。
+        #   输出：水平零速度，尽量悬停；持续收集 du/dv/height。
+        #   退出：采样时间和最少样本数同时满足。
+        #   物理意义：先观察噪声和漂移，再决定一次动作，不被单帧角点抖动驱动。
+        #   风险：采样太久会被风持续吹走；太短则均值不稳定。
+        #
+        # ALIGN.actuate
+        #   进入：平均误差超出当前阶段死区，成功生成 actuation plan。
+        #   输出：固定水平速度，持续到 _actuate_until；垂直速度为 0。
+        #   退出：持续时间到期，然后回 measure。
+        #   物理意义：给超过死区的有效杆量足够作用时间。
+        #   风险：执行期间新视觉只被读取但不闭环修改命令，阵风或误测会导致过冲。
+        #
+        # DESCEND
+        #   进入：本高度阶段已对准，但还没到最终阶段。
+        #   输出：vx=vy=0，vz 为负；低空目标段可用更快下降速度。
+        #   退出：机体高度达到 2 m 或 0.7 m 阶段目标，再回 ALIGN。
+        #   物理意义：将长下降拆成几段，每段重新水平校准。
+        #   风险：下降途中完全不做水平视觉纠偏，强风会一直漂到下一阶段才修正。
+        #
+        # LAND
+        #   进入：最终阶段已对准，或者某些极低高度 force 条件满足。
+        #   输出：只发送一次飞控 land 服务，后续等待接地确认。
+        #   退出：接地确认或 finalize timeout 后，执行零命令、disarm 和状态恢复。
+        #   物理意义：最终触地交给飞控内部降落器，而非 Python 连续下压油门。
+        #   风险：force 条件可绕过水平对准；timeout 后落锁要求高度数据绝对可靠。
+        #
+        # ---------------------------------------------------------------------
+        # detected 与 detection_timeout 不相同
+        # ---------------------------------------------------------------------
+        # marker_detected 只表示当前帧；detection_timeout 表示距最后成功检测是否仍在
+        # loss_timeout 内。当前 ALIGN 分支要求二者都成立，所以当前帧丢码即退 SEARCH，
+        # 并不会在 timeout 窗口内继续按旧误差横移。timeout 更多是防止陈旧检测状态。
+        #
+        # ---------------------------------------------------------------------
+        # 为什么 update 不直接发 MQTT
+        # ---------------------------------------------------------------------
+        # update 负责“决策”，返回 cmd/action；maybe_send_command 负责“执行许可”。
+        # 这种拆分让状态机可以每帧更新，但命令仍受以下门控：
+        #
+        # - control_rate：业务层最大发送频率。
+        # - min_velocity_send_interval：最终不可绕过的时间间隔。
+        # - send_every_n_frames：帧数间隔；变化足够大时可提前，但仍受时间间隔限制。
+        # - velocity_resend_epsilon：小于阈值的浮点变化视为同一命令。
+        # - autonomous mode：RTL/LAND 等模式中禁止脚本抢控制。
+        # - recent motion reject：飞控刚拒绝命令后短暂停发，避免刷屏。
+        # - OSD readiness：模式、joystick/PVA 状态必须真实就绪。
+        # - near-center pause：可选的中心附近短暂停顿，目前默认关闭。
+        #
+        # 假设 control_rate=20 Hz 表示理论最短 0.05 s，但 min interval=0.12 s，真实
+        # 上限仍只有约 8.3 Hz。调高 control_rate 并不会越过 0.12 s 的最终限制。
+        #
+        # ---------------------------------------------------------------------
+        # 接地确认不是一个瞬时比较
+        # ---------------------------------------------------------------------
+        # touchdown_confirmed 要求高度低于阈值，同时 |vertical_speed| 小于阈值，并
+        # 连续保持 touchdown_confirm_time。持续判定可过滤单帧雷达跳变或速度过零。
+        # 若 vertical_speed 是 None，代码把速度条件视为满足，安全性退化为只看高度。
+        #
+        # should_finalize_land 还有 land_finalize_timeout 兜底。即使始终没有满足接地
+        # 判定，超时也会进入 shutdown_after_land 并 disarm。这防止程序永久挂住，
+        # 但若飞机仍在空中会非常危险；该时间不能未经机型和场地测试直接沿用。
         now = time.time()
         self.frame_index += 1
         det = self.detect(frame_bgr)
@@ -1890,6 +2164,67 @@ class TailH264Source(object):
     #
     # 三个后台线程：writer 把 H264 字节写入 FFmpeg stdin；reader 从 stdout
     # 组装固定大小 BGR 帧；stderr 收集解码错误。主线程通过 Condition 取最新帧。
+    #
+    # =========================================================================
+    # 第三章：为什么视频输入会影响控制稳定性
+    # =========================================================================
+    # 控制器需要的是“当前飞机看到什么”，不是完整播放每一帧。若摄像头 30 FPS，
+    # 算法只能处理 10 FPS，却把剩余帧排队，延迟会持续增长：一分钟后处理的可能是
+    # 几秒前画面。即使检测精确，用旧误差控制当前飞机也会形成严重振荡。
+    # 因此 TailH264Source 只保存 latest_frame，新帧覆盖旧帧。丢帧降低时间分辨率，
+    # 但能保持反馈“新鲜”；对实时控制，低延迟通常比逐帧完整更重要。
+    #
+    # OpenCVVideoSource 与 TailH264Source：
+    # - OpenCV 路径简单，适合普通文件、摄像头和 RTSP；底层缓冲多少取决于后端。
+    # - tail 路径适合另一个进程持续追加的裸 H264 文件，可显式控制读取与解码缓存。
+    #
+    # 裸 H264 不是一张张独立图片。SPS 描述序列参数，PPS 描述图像参数，IDR 是可
+    # 独立开始解码的关键帧；普通 P/B 帧可能依赖之前帧。若从文件末尾随便一个字节
+    # 开始，FFmpeg 可能在下一个 SPS/PPS/IDR 前都无法输出画面。
+    #
+    # tail_start_mode=warm 会从末尾往前回看 tail_warm_bytes，使 FFmpeg 更可能先读到
+    # 必要参数和关键帧。但这些历史字节可能属于上一次飞行，所以 _live_data_seen 在
+    # 读指针越过启动时 initial_size 前阻止主线程使用画面。启动快与避免旧帧控制之间
+    # 就是这里的取舍。
+    #
+    # 数据流和线程：
+    #
+    #   growing .h264 file
+    #       | writer thread: read bytes, handle rotation/truncation
+    #       v
+    #   FFmpeg stdin -> decoder -> FFmpeg stdout (raw BGR bytes)
+    #                               |
+    #                               | reader thread: _read_exact(frame_bytes)
+    #                               v
+    #                         latest_frame + Condition
+    #
+    # stderr thread 必须持续读取错误输出。若子进程 stderr 管道写满而无人消费，FFmpeg
+    # 可能阻塞，继而停止 stdout，表现为视频莫名卡死。
+    #
+    # 为什么 _read_exact？管道的 read(n) 只保证“最多 n 字节”，不保证一次凑满。
+    # BGR24 每像素 3 字节，因此一帧严格需要 width*height*3。少一个字节就 reshape，
+    # 下一帧边界会整体错位，画面数据不可用。
+    #
+    # 文件轮转：录像进程可能删除旧文件并创建同名新文件。Unix 可用 inode 判断；
+    # Windows 的 st_ino 行为依文件系统而异。文件大小变小则视为截断。两种情况都要
+    # 关闭旧句柄、重置 live_data_seen 并重新打开。
+    #
+    # FFmpeg 低延迟参数：
+    # - nobuffer/low_delay 尽量减少内部缓存；
+    # - analyzeduration=0 和小 probesize 缩短格式探测；
+    # - avioflags=direct 尽量减少 I/O 缓冲；
+    # - stdin flush 可更快把小块数据交给 FFmpeg，但增加系统调用和 CPU 开销。
+    #
+    # 参数并非越小越好。probesize 太小可能拿不到足够参数，低码率或损坏码流更易
+    # 启动失败；轮询间隔太小会空转消耗 CPU；read_chunk 太小增加调用次数，太大则
+    # 可能等待更多数据。应同时观测 source_lag、CPU、解码错误和检测帧率。
+    #
+    # 时间戳局限：latest_frame_ts 是“本机解码完成时间”，不是相机曝光时间。网络、
+    # 写文件和编码阶段的延迟没有被计入，所以 overlay 显示的 lag 是下界。高可靠
+    # 系统应让采集端携带源时间戳，并做时钟同步。
+    #
+    # release 设置 stop_event、唤醒等待者、terminate FFmpeg，超时后才 kill。守护线程
+    # 随进程退出，但显式收尾能减少管道未关闭、FFmpeg 残留和文件句柄泄漏。
     def __init__(self, args):
         self.args = args
         self.proc = None
@@ -2145,6 +2480,128 @@ class TailH264Source(object):
 def build_parser():
     # 参数很多是因为该脚本带有现场调参历史。阅读时按下面的分组理解，
     # 不要把每个参数都当成独立算法。
+    #
+    # =========================================================================
+    # 第四章：参数调优手册
+    # =========================================================================
+    #
+    # 调参第一原则：一次只改一个物理问题相关的小组，保留录像、OSD 和实际位移。
+    # 若同时改轴符号、增益、死区和高度阈值，即使结果变好也无法知道原因。
+    #
+    # A. 图像尺寸与相机内参
+    #
+    # image_width/height 必须与送入检测器的实际 resize 后尺寸一致。camera_cx/cy
+    # 通常接近宽高一半，但应来自标定。fx/fy 控制像素到角度/距离的比例：
+    # fx 填得过大，会估出更高高度，但同一像素误差换算出的水平距离也可能变化；
+    # 不要用“调 fx”弥补 marker_size 或安装偏移错误。
+    #
+    # camera_offset_x/y 描述相机与期望机体落点的水平机械偏移。高空时换成较小像素
+    # 补偿，低空像素补偿会变大，因此 offset_comp_disable_below 在低空关闭它，避免
+    # 因高度噪声让目标像素剧烈移动。若机械偏移是真实且标定可靠，直接关闭也会留下
+    # 固定落点偏差；这是稳定性与精度的取舍。
+    #
+    # swap_xy、invert_x/y、image_yaw_comp_deg 决定控制方向，是最高风险参数。方向
+    # 错误时不要先降低增益继续飞，应停机确认坐标链。yaw 补偿角单位是度，符号要用
+    # 人工移动标志和输出日志验证。
+    #
+    # B. Marker 参数
+    #
+    # marker_size 单位米，必须是编码黑白方形区域对应的真实边长，而非整个降落板。
+    # 填大 10%，视觉高度也大约高估 10%。marker_id 防止追踪场景中其他码；字典配置
+    # 必须和打印标志一致。min_marker_perimeter_rate 调大可过滤小噪声，也会让远距离
+    # 小目标更早消失；调小提高远距召回，但误检和计算量可能增加。
+    #
+    # C. 高度机械偏移与来源
+    #
+    # radar_ground_offset 和 camera_ground_offset 是传感器到机体参考落地点的机械
+    # 高度。它们影响“传感器高度”转“机体离地高度”。误差在高空不明显，接近地面
+    # 却会直接改变 LAND、touchdown 和 startup guard 条件。
+    #
+    # height_judge_source=vision 依赖 ArUco 尺寸，受倾斜和模糊影响；radar 通常更适合
+    # 近地高度，但可能受地面材质、盲区和安装角影响。选择来源不等于自动融合，代码
+    # 没有 EKF，也没有基于测量方差动态加权。
+    #
+    # D. 悬停采样
+    #
+    # hover_measure_time 增大：均值更稳、控制更慢、持续风漂移更大。
+    # hover_measure_min_samples 增大：要求更多有效帧；视频帧率下降或偶发丢码时可能
+    # 长期无法决策。二者必须结合实际有效检测 FPS，例如 2 s 内要求 18 个样本只需
+    # 9 FPS，但若有效检测只有 5 FPS 就永远不够。
+    #
+    # E. 杆量和动作时间
+    #
+    # timed_stage_min_joystick 必须略高于飞控真实起效门槛。太低导致计划执行却不动；
+    # 太高导致最小一步过大。high/mid/final 应随高度降低而收紧，低空不能沿用高空
+    # 猛烈杆量。
+    #
+    # timed_wind_bias 是无方向估计的“额外力度”，不是基于风向的前馈。它在所有修正
+    # 方向上增加绝对杆量；太大会造成无风时过冲。真正风补偿应估计扰动向量，而非
+    # 只提高最小杆量。
+    #
+    # timed_joystick_distance_gain 决定误差每增加 1 m 附加多少杆量。增大它会让大误差
+    # 更快修正，但 joy 最终仍被 joystick_max 截断。若许多计划都顶到上限，再增大
+    # gain 没有效果，只会缩小未饱和区。
+    #
+    # min/max actuation time 与最小杆量共同决定“最小位移步长”。即使 residual 很小，
+    # 也至少以有效杆量运动 min_time。低空振荡时应检查这一最小步长是否已经大于允许
+    # 误差，而不是只调像素容差。
+    #
+    # F. 响应自适应
+    #
+    # response_gain_init 是对飞控实际响应/理论速度的初始猜测。填小会算出更长时间，
+    # 可能首轮过冲；填大则首轮移动不足。update_alpha 大表示相信最近一轮，适应快但
+    # 易被误检污染；小表示变化平滑但适应风和载荷变化慢。gain_min/max 防止发散。
+    #
+    # G. 容差与阶段高度
+    #
+    # high/mid/final center tolerance 单位 px，不是厘米。相同 px 在高空代表更大米级
+    # 距离。增大容差会更快进入下降但落点更偏；减小会反复 ALIGN，甚至因噪声永远
+    # 无法下降。final 容差应结合相机高度换算成实际允许落点误差后确定。
+    #
+    # stage_high_alt_height 和 final_direct_land_height 决定何时切换参数组。阈值附近
+    # 高度噪声可能使阶段来回变化，代码没有滞回区；因此高度源抖动要先解决。
+    #
+    # descent_speed 是常规段下降速度，low_alt_fast_descent_speed 名称虽叫 fast，
+    # 是否安全取决于飞控和起落架。下降更快减少风漂移时间，却缩短视觉与人工反应
+    # 时间，并可能导致地效或高度测量延迟引起硬着陆。
+    #
+    # direct_vertical_* 低于阈值后停止水平调整，目的是避免贴地横移翻覆；设得过高会
+    # 带着较大偏差直降。force_land_* 更激进：低于阈值可无视对准直接 LAND。
+    # 这两组阈值必须和传感器机械 offset、盲区一起标定。
+    #
+    # H. MQTT 和飞控限制
+    #
+    # manual_hor/cli/land_spd_max 同时参与飞控限制和速度到杆量比例。增大上限时，同样
+    # m/s 请求换算出的杆量反而更小；若落入死区，又会被强制提升。它不是简单的
+    # “最大速度越大飞得越快”，而会改变整条换算链。
+    #
+    # joystick_max_value 最终还受 hard_limit 限制。默认 300 远小于协议可能允许的
+    # 1000，是现场保守上限。xy/z trigger、force 和 bypass 必须满足合理关系：force
+    # 应高于真实起效门槛，bypass 决定何时保留原始大杆量。
+    #
+    # joystick_min_effective_mode=hold 连续、响应确定但最小动作较大；pulse 平均作用
+    # 更细，却依赖命令频率、网络抖动和飞控对短脉冲的响应。周期若比实际发送间隔还
+    # 短，程序可能总采到相同相位，理论占空比不成立。
+    #
+    # I. 命令调度
+    #
+    # control_rate、min_velocity_send_interval、send_every_n_frames 和 keepalive 是四层
+    # 约束。真实发送频率由最严格者决定。调试“为何没发命令”应打开 debug_send_gate，
+    # 不要盲目同时减小所有间隔。
+    #
+    # resend_epsilon 太小会把噪声当新命令频繁发送；太大则真实小修正不更新。near
+    # center pause 默认关闭，开启后可能造成“动一下、停一下又被风吹走”的节拍振荡。
+    #
+    # J. 接地和落锁
+    #
+    # touchdown height 必须对应所选高度源的物理参考点。vertical_speed 阈值太大，
+    # 尚在下降也可能被视为稳定；confirm_time 太短易受瞬时值影响，太长会延迟落锁。
+    # land_finalize_timeout 到期无条件进入收尾，是全文件风险最高的参数之一。
+    #
+    # no_disarm 是 store_true、默认 False，可显式禁用自动落锁；但 mqtt_enable、
+    # subscribe_osd/reply、wait_reply、setup_before_run、require_osd_ready、
+    # force_ready_on_start、restore_mode_on_interrupt 和 tail_require_live_data 使用
+    # store_true 且 default=True，当前 CLI 没有 --no-* 对应项，命令行无法关闭。
     p = argparse.ArgumentParser(description='Aruco precision landing -> MQTT virtual joystick output with landing cleanup / height offset handling')
 
     # ---- 视频输入与处理频率 -------------------------------------------------
@@ -2358,6 +2815,136 @@ def build_parser():
 
 
 def build_source(args):
+    # =========================================================================
+    # 第五章：关键函数调用索引与现有局限
+    # =========================================================================
+    #
+    # 如果你准备逐函数阅读，可按下面调用链，而不是从第 1 行机械读到最后：
+    #
+    # run_with_interrupt_cleanup
+    #   -> build_parser：把命令行转换成 args 配置对象。
+    #   -> MqttAdapter.connect：建立网络线程和订阅。
+    #   -> capture_startup_state：记录原飞行模式/控制器状态。
+    #   -> initialize_for_run：清理残留状态并申请本次控制权。
+    #   -> build_source/open：选择视频输入并启动解码。
+    #   -> ArucoLandingController：保存视觉、状态机和自适应控制状态。
+    #   -> 循环 source.read -> controller.update -> maybe_send_command。
+    #   -> LAND 后 should_finalize_land -> shutdown_after_land。
+    #
+    # MqttAdapter 方法按职责：
+    # _on_connect/_on_message/_on_disconnect 是网络线程回调；make_msg、publish_method、
+    # wait_reply 是请求响应基础设施；capture/restore/release/initialize 管理控制权；
+    # _velocity_payload/_joystick_payload 负责单位和协议转换；_apply_* 处理死区；
+    # send_velocity/send_land/send_disarm 是真正产生飞行副作用的出口。
+    #
+    # ArucoLandingController 方法按职责：
+    # raw_radar_height/vision_height/selected_* 统一高度参考；get_stage_* 选择阶段参数；
+    # filter_detection_error/smooth_xy_command 是旧连续路径的滤波器；transform_xy_pair
+    # 处理轴映射；collect/summarize_measure 形成稳定测量；estimate_body_error_m 做几何
+    # 换算；build_timed_actuation_plan 产生动作；update_axis_response_from_measure 更新
+    # 简单模型；detect 读视觉；update 执行状态机；maybe_send_command 执行安全门控；
+    # touchdown_confirmed/should_finalize_land 决定何时允许落锁收尾。
+    #
+    # -------------------------------------------------------------------------
+    # 现有局限 1：不是完整位姿估计
+    # -------------------------------------------------------------------------
+    # detect 只使用中心和平均边长，没有相机畸变校正，也没有 solvePnP 得到旋转和平移。
+    # 无人机 roll/pitch、地面坡度、标志倾斜都会让高度和水平误差近似出现系统偏差。
+    # 更完整方案应使用标定内参/畸变、PnP，并把相机外参和 IMU 姿态变换到机体系。
+    #
+    # 现有局限 2：没有状态估计器
+    # -------------------------------------------------------------------------
+    # 代码用均值和一阶低通抑制噪声，没有 EKF/UKF 去联合估计位置、速度、IMU 偏置
+    # 与测量延迟。视觉短时丢失时也没有预测目标运动，而是退回 SEARCH。这种保守行为
+    # 比盲飞安全，但抗遮挡和连续性有限。
+    #
+    # 现有局限 3：DESCEND 期间不开水平视觉闭环
+    # -------------------------------------------------------------------------
+    # 分段下降只发 vz，直到到达目标高度才重新 ALIGN。它简化了控制耦合，却允许风
+    # 在整个下降段积累偏差。若改成边降边修，需要重新评估姿态耦合、地面接近风险、
+    # 视频延迟和水平速度限制，不能只在现有分支里加 vx/vy。
+    #
+    # 现有局限 4：force-land 绕过对准
+    # -------------------------------------------------------------------------
+    # should_enter_land 在极低高度可仅凭高度返回 True，不检查 du/dv。这避免近地反复
+    # 横移，却可能偏离降落板。阈值安全性依赖起落架尺寸、标志位置和高度源准确度。
+    #
+    # 现有局限 5：超时后仍 disarm
+    # -------------------------------------------------------------------------
+    # LAND 后若接地条件长期不成立，land_finalize_timeout 仍触发 shutdown_after_land。
+    # 这是防止软件永远挂起的现场策略，但“软件超时”并不能证明“飞机已在地面”。
+    # 生产系统应结合着陆检测、推力/加速度、电机状态和飞控明确 landed 状态。
+    #
+    # 现有局限 6：测量样本时间清理无效
+    # -------------------------------------------------------------------------
+    # collect_measure_sample 追加的字典没有 ts 字段，但后面只有在首样本含 ts 时才按
+    # cutoff 清理，因此该分支实际不会运行。当前每轮 phase 会重置样本，通常不会无限
+    # 累积，但代码意图和实现不一致。学习版只指出，不修复，以保持 AST 等价。
+    #
+    # 现有局限 7：部分 CLI 布尔参数无法关闭
+    # -------------------------------------------------------------------------
+    # argparse 的 action='store_true', default=True 意味着“不传”和“传了”都是 True。
+    # 没有 store_false 或 BooleanOptionalAction 时，mqtt_enable、setup_before_run 等参数
+    # 不能从 CLI 关闭。这是配置接口问题，不代表代码内永远不能赋 False。
+    #
+    # 现有局限 8：两个主循环重复
+    # -------------------------------------------------------------------------
+    # main 和 run_with_interrupt_cleanup 大量重复，__main__ 只调用后者。未来修改控制
+    # 循环若只改一个，会产生行为分叉。理想结构是单一 run(args) 加外层异常包装；
+    # 本学习版不重构，以保证现场代码逐语句一致。
+    #
+    # 现有局限 9：遥测没有显式新鲜度
+    # -------------------------------------------------------------------------
+    # last_osd 被保存，但 relative_alt、vertical_speed 等没有各自时间戳。MQTT 断流后
+    # 可能继续使用最后值；connected 状态也不等于每项遥测新鲜。高可靠控制应检查
+    # age，并在超时后停止运动或交给飞控 failsafe。
+    #
+    # 现有局限 10：接地速度缺失时放宽
+    # -------------------------------------------------------------------------
+    # touchdown_confirmed 中 vertical_speed=None 会令 vs_ok=True。这样兼容缺少字段的
+    # 固件，却失去一项接地证据。若高度传感器也有近地盲区，误判风险进一步增大。
+    #
+    # 现有局限 11：response gain 不是动力学模型
+    # -------------------------------------------------------------------------
+    # 每轴只有一个标量，无法表示速度建立/制动惯性、不同方向响应、风向、载荷变化、
+    # 电量变化或 x/y 耦合。它能修正平均比例，不等价于系统辨识或 MPC 模型。
+    #
+    # 现有局限 12：参数是现场默认值，不是普适常数
+    # -------------------------------------------------------------------------
+    # 相机焦距、机械 offset、死区、速度限制、接地高度都与硬件和固件相关。复制脚本
+    # 到另一机型而不重新标定，语法仍正确，但物理意义已经错误。
+    #
+    # -------------------------------------------------------------------------
+    # 推荐验证阶梯
+    # -------------------------------------------------------------------------
+    # 第 1 层：纯静态。AST 等价、语法编译、逐轴符号纸面推导。
+    # 第 2 层：离线录像。只运行 detect/update 的无 MQTT 版本，检查状态和命令日志。
+    # 第 3 层：软件在环。模拟 OSD、延迟、丢码、风扰和 MQTT 拒绝。
+    # 第 4 层：拆桨台架。验证 topic、模式、杆量正负、零命令和中断恢复。
+    # 第 5 层：系留低风险悬停。只开水平对准，不允许 LAND/disarm。
+    # 第 6 层：分段下降，人工随时接管，逐步开放最终 LAND。
+    #
+    # 每层都应有明确通过标准，例如最大延迟、最大稳态误差、丢码后停止时间和接管
+    # 成功率。一次“飞成功”不能证明算法稳定，必须覆盖错误方向、旧帧、网络断开、
+    # 高度跳变和误检等失败场景。
+    #
+    # -------------------------------------------------------------------------
+    # 阅读完成自测
+    # -------------------------------------------------------------------------
+    # 你应能回答：
+    # 1. du=80 px、高度 2 m 时怎样换成米级误差？
+    # 2. 为什么请求 0.4 m/s 最终可能发送 170 杆量？
+    # 3. timed actuation 为什么用 residual 而不是完整 body distance？
+    # 4. ALIGN 的 measure/actuate 为什么不等价于 PID？
+    # 5. control_rate=20 为什么真实发送可能只有 8.3 Hz？
+    # 6. DESCEND 丢码为什么不会立即在该分支处理水平误差？
+    # 7. 哪些路径可以在未对准时进入 LAND？
+    # 8. 为什么 MQTT publish 成功不代表动作成功？
+    # 9. warm history 为什么既帮助启动又带来旧帧风险？
+    # 10. 为什么 LAND timeout 后 disarm 是需要重点审查的安全策略？
+    #
+    # 若这些问题能结合具体函数和参数回答，才算理解了程序的控制逻辑，而不只是看懂
+    # Python 语法。
     # auto 根据扩展名选择；明确 tail_h264 时使用增长文件管道，否则交给 OpenCV。
     mode = args.input_mode
     if mode == 'auto':
@@ -2372,6 +2959,46 @@ def build_source(args):
 
 
 def main():
+    # =========================================================================
+    # 第六章：主循环中的时间与副作用
+    # =========================================================================
+    # 主循环每次迭代并不代表固定控制周期。耗时包括视频等待、解码、ArUco 检测、
+    # MQTT 发布和可选预览。OpenCV 模式用 target_fps 补 sleep；tail 模式由新帧到达
+    # 驱动，不额外节流。真正命令周期还会被 maybe_send_command 的门控重新限制。
+    #
+    # frame_ts 与 tick 的区别：tick 是本轮开始时间，用于 OpenCV 节流；frame_ts 是
+    # 视频源交付帧的时间，用于估算 source lag。它们都不是无人机状态采样的原始时间。
+    #
+    # frame resize 会改变像素几何。如果输入宽高比例与目标 1280x720 不同，直接 resize
+    # 造成非等比拉伸，ArUco 边长和 fx/fy 的物理对应关系被破坏。正确做法是确保采集
+    # 分辨率、标定分辨率和处理分辨率一致，或同步缩放内参并保持宽高比。
+    #
+    # controller.update 不产生网络副作用，所以理论上可以在离线录像上单独测试。
+    # maybe_send_command 才可能发布运动/land；shutdown_after_land 还会 disarm。
+    # 做离线回放时，仅设置 mqtt_enable=False 仍需检查 argparse 默认和控制路径，最好
+    # 使用隔离 broker 或显式 mock MqttAdapter，不能依赖“网络应该连不上”。
+    #
+    # preview 的 imshow/waitKey 会引入 GUI 调度延迟。人工观察方便，但正式性能测试应
+    # 同时测量开启/关闭 preview 的处理帧率。按 q/Esc 会先 release_control 再退出，
+    # 这比直接关闭终端窗口更可控。
+    #
+    # LAND 后分两种行为：no_disarm=False 时等待接地/超时并收尾；no_disarm=True 时
+    # 进入 LAND 后很快退出脚本，不自动落锁。后者便于把最终电机管理交给飞控或人工，
+    # 但退出后飞控将怎样继续 LAND 取决于其自身状态机。
+    #
+    # finally 负责释放视频和 MQTT，即使循环中抛异常也执行；但异常处理中的
+    # restore_after_interrupt 更重要，因为 close 网络连接本身不会主动发送零杆量。
+    # 清理函数也可能失败，所以代码用多层 try/except 尽量继续剩余收尾步骤。
+    #
+    # main 与 run_with_interrupt_cleanup 重复，实际入口是后者。阅读调试时应在后者
+    # 设置断点；如果只修改 main，直接运行脚本不会执行你的修改。
+    #
+    # 调试建议记录每轮：frame_ts、state、phase、du/dv、height source、body error、
+    # plan joy/duration、最终 payload、OSD mode/state 和 reply result。只看“飞机偏了”
+    # 无法区分视觉误差、坐标符号、发送门控、飞控拒绝还是执行器死区。
+    #
+    # 控制程序的正确性包含三层：算法算出的命令合理；命令按预期送达飞控；飞控和
+    # 机体对命令产生预期响应。任何一层都可能失败，日志也应按这三层组织。
     # 早期保留的主循环，逻辑与下方版本相近，但 __main__ 实际不调用它。
     args = build_parser().parse_args()
     args.camera_radar_height_offset = float(args.camera_ground_offset) - float(args.radar_ground_offset)
